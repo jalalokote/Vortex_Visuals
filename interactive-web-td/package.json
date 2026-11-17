@@ -1,0 +1,22 @@
+{
+  "name": "vortex-studio-touchdesigner",
+  "version": "1.0.0",
+  "description": "Real-time TouchDesigner Creative Media & Video FX Web Interface",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "keywords": [
+    "touchdesigner",
+    "mcp",
+    "generative",
+    "video-fx",
+    "mjpeg"
+  ],
+  "author": "Antigravity & User",
+  "license": "ISC",
+  "dependencies": {
+    "@julusian/midi": "^3.8.1",
+    "ws": "^8.22.2"
+  }
+}

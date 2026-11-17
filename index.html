@@ -1,0 +1,876 @@
+<!DOCTYPE html>
+<html lang="es" data-theme="dark">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>VORTEX // Modular Audiovisual Synthesizer & TD Live Deck</title>
+  <link rel="icon" href="data:,">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link
+    href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap"
+    rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+  <style>
+    .hud-rack {
+      grid-template-columns: 1.24fr 1.05fr 0.98fr 1.65fr;
+    }
+
+    .rack-module--gen {
+      height: auto;
+      min-height: 225px;
+      gap: 4px;
+    }
+
+    .gen-3d-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 6px;
+      margin-top: 1px;
+    }
+
+    .gen-3d-badge {
+      font-family: var(--font-mono);
+      font-size: 8.5px;
+      font-weight: 700;
+      letter-spacing: 0.45px;
+      padding: 1px 6px;
+      border-radius: 3px;
+      background: rgba(0, 240, 255, 0.14);
+      border: 1px solid rgba(0, 240, 255, 0.45);
+      color: #67e8f9;
+      white-space: nowrap;
+    }
+
+    .gen-3d-flight-btn {
+      font-family: var(--font-mono);
+      font-size: 8.5px;
+      font-weight: 700;
+      padding: 2px 7px;
+      border-radius: 999px;
+      border: 1px solid rgba(255, 255, 255, 0.22);
+      background: rgba(255, 255, 255, 0.06);
+      color: var(--text-secondary);
+      cursor: pointer;
+      white-space: nowrap;
+      transition: all 150ms ease;
+    }
+
+    .gen-3d-flight-btn:hover {
+      border-color: #00f0ff;
+      color: #ffffff;
+    }
+
+    .gen-3d-flight-btn.active {
+      background: linear-gradient(90deg, rgba(0, 240, 255, 0.24), rgba(236, 72, 153, 0.24));
+      border-color: #00f0ff;
+      color: #ffffff;
+      box-shadow: 0 0 10px rgba(0, 240, 255, 0.35);
+    }
+
+    .module-actions--3d .sub-btn {
+      font-size: 8.8px;
+      padding: 4px 2px;
+      border-color: rgba(0, 240, 255, 0.28);
+    }
+
+    .module-actions--3d .sub-btn.active {
+      background: rgba(0, 240, 255, 0.24);
+      border-color: #00f0ff;
+      color: #ffffff;
+      box-shadow: 0 0 10px rgba(0, 240, 255, 0.35);
+    }
+
+    .rack-module--gen .knobs-row--5 {
+      gap: 2px;
+      padding: 2px 0 4px 0;
+    }
+
+    .rack-module--gen .knobs-row--5 .knob-svg-wrap,
+    .rack-module--gen .knobs-row--5 .knob-svg,
+    .rack-module--gen .knobs-row--5 .knob-rotor {
+      width: 42px;
+      height: 42px;
+    }
+
+    .rack-module--gen .knobs-row--5 .knob-label {
+      font-size: 8px;
+    }
+
+    .rack-module--gen .knobs-row--5 .knob-value {
+      font-size: 8.5px;
+    }
+
+    .btn-reset-visuals {
+      border-color: rgba(244, 63, 94, 0.45);
+      color: #fda4af;
+      font-weight: 600;
+    }
+
+    .btn-reset-visuals:hover {
+      background: rgba(244, 63, 94, 0.18);
+      border-color: #f43f5e;
+      color: #ffffff;
+      box-shadow: 0 0 10px rgba(244, 63, 94, 0.35);
+    }
+  </style>
+</head>
+
+<body>
+  <!-- Fullscreen real-time canvas (WebGL TOP-chain emulation) -->
+  <canvas id="glCanvas" aria-label="Visual generativo en tiempo real"></canvas>
+  <canvas id="kineticTextOverlayCanvas" class="kinetic-text-overlay-canvas" aria-hidden="true"></canvas>
+
+  <!-- TouchDesigner Custom Deck Signal & Spectrum Visualizer Canvas (when in TD mode without video stream) -->
+  <canvas id="tdDeckCanvas" class="td-deck-canvas" aria-label="Monitor de señales de TouchDesigner" hidden></canvas>
+
+  <!-- Optional TouchDesigner MJPEG / WebSocket Frame Stream -->
+  <img id="tdLiveImage" alt="Stream en vivo desde TouchDesigner" />
+
+  <!-- Drag & drop overlay -->
+  <div id="dropOverlay" class="drop-overlay" aria-hidden="true">
+    <div class="drop-overlay-inner">⤓ Suelta tu imagen o video para procesarlo en vivo</div>
+  </div>
+
+  <!-- Initial Photosensitive Epilepsy Warning Modal -->
+  <div id="epilepsyModal" class="epilepsy-modal-backdrop" role="dialog" aria-modal="true"
+    aria-labelledby="epilepsyModalTitle">
+    <div class="epilepsy-modal-card hud-pointer">
+      <div class="epilepsy-modal-badge">
+        <span id="epilepsyModalTitle">⚠️ ADVERTENCIA DE FOTOSENSIBILIDAD / EPILEPSIA</span>
+      </div>
+      <p class="epilepsy-modal-text">
+        VORTEX genera visuales reactivos en tiempo real con destellos estroboscópicos, cambios rápidos de color,
+        patrones geométricos pulsantes y efectos de alto contraste que pueden desencadenar crisis en personas con
+        epilepsia fotosensible. Se recomienda discreción al utilizar el sistema.
+      </p>
+      <div class="epilepsy-modal-footer">
+        <button type="button" id="btnAcceptEpilepsyModal" class="epilepsy-enter-btn">
+          [ ⚡ Entendido, Entrar a VORTEX ]
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- TouchDesigner Connection & Setup Modal -->
+  <div id="tdModal" class="td-modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="tdModalTitle" hidden>
+    <div class="td-modal-card hud-pointer">
+      <div class="td-modal-header">
+        <div class="td-modal-title-wrap">
+          <span class="status-led warn" id="tdModalLed"></span>
+          <h2 id="tdModalTitle" class="td-modal-title">Modo TouchDesigner (TD Custom Deck)</h2>
+        </div>
+        <span class="td-status-pill" id="tdModalStatusPill">Listo para enlazar</span>
+      </div>
+
+      <div class="td-modal-body">
+        <div class="td-modal-section">
+          <h3>🎛️ ¿Cómo funciona esta herramienta?</h3>
+          <p>
+            Te permite usar toda esta interfaz web (<strong>12 perillas rotativas con nombres de canal editables, MIDI
+              desde Purr Data, triggers, audio FFT y BPM</strong>) como una consola de control en vivo para
+            TouchDesigner sin programar redes complejas.
+          </p>
+        </div>
+
+        <div class="td-modal-section">
+          <h3>📋 Requisitos paso a paso</h3>
+          <ol class="td-steps-list">
+            <li>
+              <strong>Paso 1:</strong> Tener <strong>TouchDesigner</strong> instalado y abierto en tu computadora local.
+            </li>
+            <li>
+              <strong>Paso 2:</strong> En tu proyecto <code>.toe</code>, agrega un nodo <code>WebSocket DAT</code>
+              conectado a <code>ws://localhost:8080</code> (o usa un <code>Web Server DAT</code> en tu puerto preferido)
+              para recibir los paquetes JSON <code>td_control</code>, <code>td_trigger</code>, <code>td_media</code> y
+              <code>td_audio</code>.
+            </li>
+            <li>
+              <strong>Paso 3:</strong> Opcionalmente, personaliza los nombres de las perillas con el botón
+              <code>✏️</code> para que coincidan con los parámetros de tu red en TouchDesigner.
+            </li>
+          </ol>
+        </div>
+
+        <div class="td-modal-ws-config">
+          <label for="tdModalWsInput">🔌 Puerto / URL WebSocket para TouchDesigner:</label>
+          <div class="td-modal-ws-row">
+            <input type="text" id="tdModalWsInput" class="td-modal-input" value="ws://localhost:8080"
+              spellcheck="false" />
+            <button type="button" id="btnTdApplyWs" class="td-btn-apply-ws">Aplicar URL</button>
+          </div>
+          <small>Por defecto usa el Hub local <code>ws://localhost:8080</code> (que también recibe UDP de Purr Data) o
+            ingresa el puerto de tu Web Server DAT (ej. <code>ws://localhost:9980</code>).</small>
+        </div>
+
+        <p class="td-modal-feedback" id="tdModalFeedback" hidden></p>
+      </div>
+
+      <div class="td-modal-footer td-modal-footer--stacked">
+        <button type="button" id="btnTdEnterDeck" class="td-btn td-btn--enter">
+          🎛️ Ya abrí mi archivo en TouchDesigner → Ir a la Consola TD
+        </button>
+        <div class="td-modal-footer-sub">
+          <button type="button" id="btnTdRetry" class="td-btn td-btn--retry">🔄 Verificar stream de video TD</button>
+          <button type="button" id="btnTdCancelToWebGL" class="td-btn td-btn--webgl">⚡ Continuar en modo WebGL
+            Autónomo</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <main id="appHUD" class="hud-container">
+
+    <!-- ============ TOP BAR: engine / UDP Purr Data / bridge status ============ -->
+    <header class="hud-header hud-pointer">
+      <div class="hud-brand">
+        <span class="brand-dot" aria-hidden="true"></span>
+        <div class="brand-badge">VORTEX</div>
+        <div class="engine-status" id="engineStatus" title="Estado del motor visual">
+          <span class="status-led online" id="engineLed"></span>
+          <span id="engineLabel">WebGL Standalone</span>
+          <span class="engine-fps" id="fpsReadout">-- FPS</span>
+        </div>
+      </div>
+
+      <div class="mode-switch" role="group" aria-label="Motor visual">
+        <button id="btnEngineWebGL" class="mode-btn active"
+          title="Motor WebGL en el navegador (funciona sin TouchDesigner)">⚡ WebGL</button>
+        <button id="btnEngineTD" class="mode-btn"
+          title="Consola de control en vivo para TouchDesigner (TD Custom Deck)">🎥 TD</button>
+      </div>
+
+      <div class="hud-cluster">
+        <div class="midi-group" title="Puente UDP desde Purr Data [netsend -u] en puerto 8080">
+          <span class="status-led online" id="midiLed"></span>
+          <span class="udp-bridge-badge" id="midiStatusText">UDP :8080 (Purr Data)</span>
+        </div>
+        <button id="btnMidiLearn" class="btn-hud btn-midi-learn"
+          title="MIDI Learn: actívalo, haz clic en una perilla y mueve tu control en Purr Data. Clic derecho en una perilla = borrar asignación.">
+          <span class="lbl">🎹 MIDI Learn</span>
+        </button>
+        <span id="weatherMiniBadge" class="status-pill" style="display:none; font-size:11px; padding:2px 8px;"></span>
+      </div>
+
+      <div class="hud-cluster">
+        <div class="ws-input-group"
+          title="URL WebSocket para el Hub local (:8080) o Web Server DAT de TouchDesigner (:9980)">
+          <span class="status-led" id="wsLed"></span>
+          <input type="text" id="wsUrlInput" class="ws-input" value="ws://localhost:8080"
+            aria-label="URL del puente WebSocket" spellcheck="false" />
+          <button id="btnWsConnect" class="ws-btn-connect">Bridge</button>
+        </div>
+        <div class="mode-switch" role="group" aria-label="Tema">
+          <button class="mode-btn active" data-theme-btn="dark" title="Industrial">🌙</button>
+          <button class="mode-btn" data-theme-btn="cyber" title="Cyber">⚡</button>
+          <button class="mode-btn" data-theme-btn="light" title="Claro">☀️</button>
+        </div>
+        <button id="btnResetVisuals" class="btn-hud btn-reset-visuals"
+          title="Reset de emergencia: descongela y reinicia el motor visual y efectos manteniendo la música activa (Shift+R)">
+          🔄 Reset
+        </button>
+        <button id="btnFullscreen" class="btn-hud" title="Pantalla completa (F)">⛶</button>
+        <button id="btnToggleHUD" class="btn-hud" title="Ocultar HUD (H)">👁️</button>
+      </div>
+    </header>
+
+    <!-- ============ TD LIVE CONTROLLER INSPECTOR BAR (Visible in TD Mode) ============ -->
+    <section id="tdInspectorBar" class="td-inspector-bar hud-pointer" aria-label="Monitor de datos de TouchDesigner"
+      hidden>
+      <div class="td-inspector-left">
+        <span class="td-mode-badge">🟠 TD LIVE CONTROLLER MODE</span>
+        <div class="td-tx-monitor" id="tdInspectorReadout">
+          📡 TX → TD | Esperando movimiento de perilla, botón o MIDI CC...
+        </div>
+      </div>
+      <div class="td-inspector-actions">
+        <button type="button" id="btnTdAudioStream" class="td-inspector-btn td-inspector-btn--audio"
+          title="Transmitir continuamente { type: 'td_audio', bass, mid, treble, bpm } hacia TouchDesigner">
+          ⚡ Enviar Audio FFT y BPM a TD: OFF
+        </button>
+        <button type="button" id="btnResetChannelNames" class="td-inspector-btn"
+          title="Restaurar los nombres originales de las 12 perillas y botones">
+          ↺ Restaurar nombres
+        </button>
+        <button type="button" id="btnOpenTdGuide" class="td-inspector-btn"
+          title="Abrir guía de configuración y puerto de TouchDesigner">
+          ℹ️ Guía / Puerto TD
+        </button>
+      </div>
+    </section>
+
+    <!-- ============ MIDDLE LEFT WORKSTATION COLUMN: 0. SOURCE (MEDIOS) + A. AUDIO & REACTIVIDAD ============ -->
+    <div class="hud-middle">
+      <div class="hud-left-column">
+
+        <!-- 0. SOURCE (MEDIOS) — Compacta arriba a la izquierda -->
+        <aside id="mediaBay" class="media-bay workstation-panel panel--src hud-pointer" aria-label="Medios y Fuentes">
+          <div class="module-header">
+            <div class="module-title-group">
+              <span class="panel-id-badge">[00 · SOURCE]</span>
+              <span class="module-title module-title--src" id="moduleTitleSrc">MEDIOS</span>
+            </div>
+            <div class="module-header-right">
+              <span class="module-tag td-node-badge td-only-pill" id="srcNodeTag">MOVIE FILE IN</span>
+              <button type="button" id="btnCollapseBay" class="icon-btn panel-collapse-btn"
+                data-collapse-panel="mediaBay" aria-expanded="true" title="Minimizar / Expandir panel">▾</button>
+            </div>
+          </div>
+
+          <div class="bay-body">
+            <div class="source-readout">
+              <span class="status-led online" id="sourceLed"></span>
+              <span id="sourceLabel">Modo Generativo (Noise)</span>
+            </div>
+
+            <div class="source-controls-bar">
+              <button class="sub-btn btn-upload-source" id="btnUpload" title="Subir imagen o video desde tu equipo">📁
+                Subir Imagen / Video</button>
+              <button class="sub-btn" id="btnCamera" title="Usar cámara web">📷 Cam</button>
+              <button class="sub-btn" id="btnPlayPause" data-action-id="media_pause" title="Pausar/Reanudar video">⏸
+                Pausa</button>
+              <button class="sub-btn active" id="btnLoop" data-action-id="media_loop" title="Repetir video en bucle">⟲
+                Loop</button>
+            </div>
+            <input type="file" id="fileInput" accept="image/*,video/*" multiple hidden />
+
+            <div id="dropZone" class="drop-zone drop-zone--compact" role="button" tabindex="0"
+              title="Arrastra imagen o video aquí o sobre el lienzo">
+              <span>⤓ Arrastra JPG · PNG · GIF · MP4 · WEBM · MOV</span>
+            </div>
+
+            <div class="media-framing-row"
+              style="display:flex;align-items:center;gap:5px;flex-wrap:wrap;margin:5px 0 2px;padding:4px 6px;border-radius:6px;background:rgba(15,23,42,0.55);border:1px solid rgba(56,189,248,0.18);font-size:9px;color:#cbd5e1;">
+              <span style="font-weight:700;color:#7dd3fc;white-space:nowrap;">Encuadre Media</span>
+              <label style="display:flex;align-items:center;gap:2px;flex:1 1 58px;min-width:54px;">
+                <span>X:</span>
+                <input type="range" id="mediaOffsetX" min="-1" max="1" step="0.01" value="0" style="width:100%;min-width:34px;accent-color:#38bdf8;" />
+              </label>
+              <label style="display:flex;align-items:center;gap:2px;flex:1 1 58px;min-width:54px;">
+                <span>Y:</span>
+                <input type="range" id="mediaOffsetY" min="-1" max="1" step="0.01" value="0" style="width:100%;min-width:34px;accent-color:#38bdf8;" />
+              </label>
+              <label style="display:flex;align-items:center;gap:2px;flex:1 1 68px;min-width:62px;">
+                <span>Zoom:</span>
+                <input type="range" id="mediaZoom" min="0.1" max="4" step="0.01" value="1" style="width:100%;min-width:34px;accent-color:#38bdf8;" />
+              </label>
+              <button type="button" id="btnResetMediaFraming" class="sub-btn"
+                style="padding:2px 6px;font-size:8.5px;line-height:1.2;white-space:nowrap;"
+                title="Restablecer encuadre al centro">Reset</button>
+            </div>
+
+            <div class="source-block source-block--media" id="mediaLibraryBlock">
+              <div class="td-library-header">
+                <span class="bay-label" id="localLibraryLabel">Medios y Muestras</span>
+                <span class="td-library-path-pill td-only-pill" id="tdMediaBadgePill" hidden>TOP · HD</span>
+              </div>
+              <div class="sample-grid" id="sampleGrid"></div>
+
+              <div class="td-native-library" id="tdNativeLibrarySection" hidden>
+                <div class="td-library-header" style="margin-top:5px;">
+                  <span class="bay-label">Muestras HD TouchDesigner</span>
+                </div>
+                <div class="td-native-grid" id="tdNativeSampleGrid"></div>
+              </div>
+
+              <div class="td-palette-library" id="tdPaletteLibrarySection" hidden>
+                <div class="td-library-header" style="margin-top:5px;">
+                  <span class="bay-label bay-label--palette">⚡ TD PALETTE GENERATORS</span>
+                  <span class="td-library-path-pill td-library-path-pill--mat">TOP · MAT</span>
+                </div>
+                <div class="td-palette-grid" id="tdPaletteGrid"></div>
+              </div>
+            </div>
+
+            <!-- 🌐 API CLOUD (TOKEN AUTH) — Clima en Tiempo Real + Buscador de Videos en la Nube -->
+            <details class="api-cloud-section" id="apiCloudSection">
+              <summary class="api-cloud-summary">
+                <span>🌐 API CLOUD (TOKEN AUTH)</span>
+                <span class="api-token-status" id="apiTokenStatusPill">🟢 Token Activo (Bearer / AppID)</span>
+              </summary>
+              <div class="api-cloud-body">
+                <div class="api-token-row">
+                  <input type="password" id="weatherTokenInput" class="api-input"
+                    placeholder="☁️ Pegar API Key de OpenWeather..."
+                    aria-label="API Key de OpenWeather" />
+                </div>
+                <div class="api-token-row">
+                  <input type="password" id="giphyTokenInput" class="api-input"
+                    placeholder="🎬 Pegar API Key de GIPHY..."
+                    aria-label="API Key de GIPHY" />
+                </div>
+
+                <!-- API 1: Clima en Tiempo Real -->
+                <div class="api-block">
+                  <div class="api-block-label">🌤️ API Clima -&gt; Visuales</div>
+                  <div class="api-row">
+                    <input type="text" id="apiWeatherCityInput" class="api-input" value="Puebla"
+                      placeholder="Ciudad (ej. Puebla, Tokio)..." aria-label="Ciudad para API de clima" />
+                    <button type="button" id="btnSyncWeather" class="sub-btn api-action-btn"
+                      title="Consultar GET /api/weather con Token y modular mundo 3D y shader">☁️ Sincronizar
+                      Clima</button>
+                  </div>
+                  <div class="api-weather-presets" role="group" aria-label="Pruebas rápidas de clima en vivo">
+                    <button type="button" class="sub-btn api-preset-btn" data-weather-preset="storm"
+                      title="Simular clima Tormenta con lluvia 3D y rayos al ritmo del Bass">🌧️ Tormenta</button>
+                    <button type="button" class="sub-btn api-preset-btn" data-weather-preset="heat"
+                      title="Simular Calor Solar con paleta Infrarrojo y partículas térmicas">🔥 Calor Solar</button>
+                    <button type="button" class="sub-btn api-preset-btn" data-weather-preset="snow"
+                      title="Simular Nieve y Niebla densa en el mundo 3D">❄️ Nieve/Niebla</button>
+                  </div>
+                  <div id="weatherStatusBadge" class="api-weather-badge">🌡️ Clima listo · Sincroniza una ciudad</div>
+                </div>
+
+                <!-- API 2: Buscador de Memes, Escenas y Clips MP4 (GIPHY + URL Directa) -->
+                <div class="api-block">
+                  <div class="api-block-label">🎬 API Clips / Memes MP4 (GIPHY)</div>
+                  <div class="api-row">
+                    <input type="text" id="apiVideoQueryInput" class="api-input"
+                      placeholder="Buscar meme, anime, glitch o pegar URL .mp4/.gif..." value="cyberpunk"
+                      aria-label="Buscar clips MP4 en GIPHY o pegar URL directa" />
+                    <button type="button" id="btnSearchApiVideos" class="sub-btn api-action-btn"
+                      title="Consultar GET /api/videos (GIPHY MP4) o cargar URL directa">🔍 Buscar API</button>
+                  </div>
+                  <div id="apiVideoResultsGrid" class="api-video-grid" aria-label="Resultados de clips MP4"></div>
+                </div>
+              </div>
+            </details>
+          </div>
+        </aside>
+
+        <!-- A. AUDIO & REACTIVIDAD — Compacta debajo de Medios -->
+        <section id="moduleAudio" class="workstation-panel panel-audio panel--audio hud-pointer"
+          aria-label="Audio y Reactividad">
+          <div class="module-header">
+            <div class="module-title-group">
+              <span class="panel-id-badge">[0A · AUDIO]</span>
+              <span class="module-title module-title--audio">AUDIO &amp; REACTIVIDAD</span>
+            </div>
+            <div class="module-header-right">
+              <span class="module-tag td-op-pill td-op-pill--chop td-only-pill">FFT · THRU</span>
+              <span class="status-led" id="audioLed" title="Estado del analizador de audio"></span>
+              <button type="button" class="icon-btn panel-collapse-btn" data-collapse-panel="moduleAudio"
+                aria-expanded="true" title="Minimizar / Expandir panel">▾</button>
+            </div>
+          </div>
+
+          <div class="panel-body audio-panel-body">
+            <!-- 1. PISTA DE AUDIO LOCAL -->
+            <div class="audio-subblock">
+              <div class="audio-subblock-title">1. PISTA DE AUDIO LOCAL</div>
+              <div class="audio-file-row">
+                <button type="button" id="btnLoadAudio" class="sub-btn sub-btn--accent"
+                  title="Cargar pista de audio local (MP3, WAV, FLAC, AAC) para reproducción y análisis FFT">
+                  🎵 Subir MP3/WAV
+                </button>
+                <input type="file" id="audioFileInput" accept="audio/*" hidden />
+                <div class="audio-mini-player" id="audioMiniPlayer">
+                  <button type="button" id="btnAudioPlayPause" class="mini-ctrl-btn" title="Reproducir / Pausar pista"
+                    disabled>▶️</button>
+                  <button type="button" id="btnAudioLoop" class="mini-ctrl-btn active" title="Repetir pista en Loop"
+                    disabled>🔁 Loop</button>
+                  <span id="audioTrackName" class="audio-track-name" title="Pista cargada">Sin pista cargada</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- 2. ENTRADA EN VIVO (DAW / INTERFAZ / MIC) -->
+            <div class="audio-subblock">
+              <div class="audio-subblock-title">2. ENTRADA EN VIVO (DAW / INTERFAZ / MIC)</div>
+              <label for="audioDeviceSelect" class="audio-field-label">Seleccionar entrada de audio:</label>
+              <select id="audioDeviceSelect" class="hud-select audio-device-select"
+                title="Entrada de audio en vivo (Pro Tools Bridge, BlackHole 2ch, SSL 2, Micrófono)"
+                aria-label="Seleccionar entrada de audio">
+                <option value="">🎛️ Entrada por defecto</option>
+              </select>
+              <div class="audio-live-row">
+                <button type="button" id="btnAudioMic" class="sub-btn audio-live-btn"
+                  title="Activar / desactivar captura de entrada de audio en vivo">
+                  🎙️ Activar Entrada Live
+                </button>
+                <button type="button" id="btnAudioThru" class="sub-btn audio-thru-btn" aria-pressed="false"
+                  title="Monitorea por tus bocinas/audífonos la señal entrante desde DAW/Interfaz/BlackHole (las pistas MP3/WAV locales siempre suenan aunque Thru esté apagado)">
+                  🔊 Monitorear Audio (Thru)
+                </button>
+              </div>
+            </div>
+
+            <!-- 3. REACTIVIDAD DE FRECUENCIAS (FFT -> FX) -->
+            <div class="audio-subblock">
+              <div class="audio-subblock-title">3. REACTIVIDAD DE FRECUENCIAS (FFT -&gt; FX)</div>
+              <div class="audio-meters-and-knob">
+                <div class="audio-telemetry-col">
+                  <div class="fft-meters" aria-label="Medidores FFT en vivo">
+                    <div class="fft-meter-row">
+                      <span class="fft-lbl">BASS</span>
+                      <div class="fft-track">
+                        <div class="fft-fill fft-fill--bass" id="meterBass"></div>
+                      </div>
+                      <span class="fft-val" id="valBass">0.00</span>
+                    </div>
+                    <div class="fft-meter-row">
+                      <span class="fft-lbl">MID</span>
+                      <div class="fft-track">
+                        <div class="fft-fill fft-fill--mid" id="meterMid"></div>
+                      </div>
+                      <span class="fft-val" id="valMid">0.00</span>
+                    </div>
+                    <div class="fft-meter-row">
+                      <span class="fft-lbl">TREBLE</span>
+                      <div class="fft-track">
+                        <div class="fft-fill fft-fill--treble" id="meterTreble"></div>
+                      </div>
+                      <span class="fft-val" id="valTreble">0.00</span>
+                    </div>
+                  </div>
+
+                  <div class="audio-fx-matrix" role="group" aria-label="Enrutar frecuencias a efectos">
+                    <span class="audio-field-label">Enrutar frecuencias a efectos:</span>
+                    <div class="matrix-toggles">
+                      <button type="button" id="btnMatrixBass" class="matrix-pill active" data-matrix="bass"
+                        title="Los bajos golpean Displace y Zoom">Bajos -&gt; Deformar</button>
+                      <button type="button" id="btnMatrixMid" class="matrix-pill active" data-matrix="mid"
+                        title="Los medios modulan Color y Feedback">Medios -&gt; Color</button>
+                      <button type="button" id="btnMatrixTreble" class="matrix-pill active" data-matrix="treble"
+                        title="Los agudos disparan Glitch y Kaleido">Agudos -&gt; Caleido</button>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="audio-knob-slot" id="rack-audio"></div>
+              </div>
+            </div>
+
+            <!-- 4. 🌱 BIO-INPUT (PURR DATA CC80 / NOTES) -->
+            <div class="audio-subblock bio-subblock"
+              style="margin-top: 6px; padding-top: 6px; border-top: 1px dashed rgba(16,185,129,0.3);">
+              <div class="audio-subblock-title"
+                style="color: #34d399; font-weight: 700; font-size: 11px; letter-spacing: 0.5px;">🌱 BIO-INPUT (PURR
+                DATA CC80 / NOTES)</div>
+              <div class="bio-control-row"
+                style="display: flex; gap: 8px; align-items: center; justify-content: space-between; flex-wrap: wrap; margin-top: 4px;">
+                <button type="button" id="btnBioTo3D" class="sub-btn active"
+                  style="border-color: #10b981; color: #10b981; font-weight: bold; padding: 4px 10px; font-size: 11px; background: rgba(16,185,129,0.15); border-radius: 4px; cursor: pointer;"
+                  title="Activar / Desactivar inyección de Bio-Pulso (Purr Data CC 80 / Notas) hacia el mundo 3D">
+                  🌱 Bio -> Mundo 3D: ON
+                </button>
+                <div class="bio-meter-wrapper"
+                  style="flex: 1; min-width: 140px; display: flex; align-items: center; gap: 6px;">
+                  <span id="bioPulseLabel"
+                    style="font-size: 11px; font-family: monospace; color: #34d399; white-space: nowrap;">🌱 Bio-Pulso:
+                    0.00</span>
+                  <div class="fft-track"
+                    style="flex: 1; height: 8px; background: rgba(0,0,0,0.6); border: 1px solid rgba(16,185,129,0.5); border-radius: 4px; overflow: hidden; position: relative;">
+                    <div id="meterBio"
+                      style="width: 0%; height: 100%; background: linear-gradient(90deg, #059669, #10b981, #6ee7b7); transition: width 0.08s ease-out;">
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+      </div>
+    </div>
+
+    <!-- ============ BOTTOM FIXED 4-MODULE WORKSTATION DOCK (MISMA ALTURA, SIN HUECOS) ============ -->
+    <section class="hud-rack hud-pointer" aria-label="Superficie de control modular de 4 módulos">
+
+      <!-- MÓDULO 1 — GENERADOR (SOLO WEBGL) -->
+      <div class="rack-module rack-module--gen panel--gen" id="moduleGen">
+        <div class="module-header">
+          <div class="module-title-group">
+            <span class="panel-id-badge">[01 · GEN]</span>
+            <span class="module-title" id="moduleTitleGen">GENERADOR</span>
+          </div>
+          <div class="module-header-right">
+            <button type="button" class="gen-switch-pill active" id="btnGenerativeMode"
+              title="Activar / Desactivar sintetizador generativo en el lienzo">
+              ⚡ Generador: ON
+            </button>
+            <button type="button" class="icon-btn panel-collapse-btn" data-collapse-panel="moduleGen"
+              aria-expanded="true" title="Minimizar / Expandir panel">▾</button>
+          </div>
+        </div>
+
+        <div class="gen-inactive-banner" id="genInactiveBanner" hidden>
+          <span class="gen-notice-badge" id="genInactiveNotice">Media activo</span>
+          <button type="button" class="gen-activate-btn" id="btnQuickActivateGen">Activar Generador</button>
+        </div>
+
+        <div class="module-actions module-actions--4">
+          <button class="sub-btn active" data-gen="0" data-action-id="gen_fluid">Fluid</button>
+          <button class="sub-btn" data-gen="1" data-action-id="gen_vortex">Vortex</button>
+          <button class="sub-btn" data-gen="2" data-action-id="gen_rings">Rings</button>
+          <button class="sub-btn" data-gen="3" data-action-id="gen_geo">Geo</button>
+        </div>
+
+        <div class="gen-3d-header">
+          <span class="gen-3d-badge"
+            title="Mundos 3D en tiempo real con Three.js: usa WASD/Flechas, Q/E, R Reset, Mouse y MIDI">🎮 WASD + MIDI
+            3D</span>
+          <button type="button" id="btnSpawnRoadObj" class="gen-3d-flight-btn"
+            title="Spawnear objeto sorpresa o cambiar bioma en Endless Drive (Costa, Volcán, Desierto, Bosque)">➕ Objeto
+            / Bioma</button>
+          <button type="button" id="btnAutoFlight3d" class="gen-3d-flight-btn active" aria-pressed="true"
+            title="Activar / Desactivar cámara cinematográfica automática (Auto-Viaje 3D). Se combina con WASD/Mouse/MIDI">🚀
+            Auto-Viaje 3D: ON</button>
+        </div>
+
+        <div class="module-actions module-actions--4 module-actions--3d" role="group"
+          aria-label="Mundos 3D interactivos Three.js">
+          <button type="button" class="sub-btn" data-three-world="0" data-three-key="aquarium"
+            data-action-id="gen_3d_aquarium"
+            title="🦈 Deep Ocean Diver 3D: Exploración submarina abisal en 1ª persona con ballenas gigantes, tiburones y ruinas sumergidas">🦈
+            Ocean Diver 3D</button>
+          <button type="button" class="sub-btn" data-three-world="1" data-three-key="cyber"
+            data-action-id="gen_3d_cyber"
+            title="🚗 Endless Drive 3D: Conducción en 1ª persona con cabina detallada, carretera curva, Titán en el horizonte y 4 biomas">🚗
+            Endless Drive</button>
+          <button type="button" class="sub-btn" data-three-world="2" data-three-key="mycelium"
+            data-action-id="gen_3d_mycelium"
+            title="🌿 Bio-Terra 3D: Ecosistema planetario con islas flotantes, cascadas luminosas, flora fractal reactiva y criaturas de luz">🌿
+            Bio-Terra 3D</button>
+          <button type="button" class="sub-btn" data-three-world="3" data-three-key="cathedral"
+            data-action-id="gen_3d_cathedral"
+            title="🏛️ Catedral / LiDAR 3D: Director estocástico mutante cada 16 beats (bóvedas góticas láser, laberintos de espejos, reloj astronómico y monolitos fractales)">🏛️
+            Catedral / LiDAR 3D</button>
+        </div>
+
+        <div class="kinetic-text-bar" role="group" aria-label="Texto 3D Reactivo en vivo">
+          <input type="text" id="kineticTextInput" class="kinetic-text-input" maxlength="72"
+            placeholder="🔤 Escribe texto 3D en vivo..." aria-label="Escribe texto 3D en vivo" />
+          <select id="text3DFont" class="kinetic-font-select" title="Tipografía 3D"
+            style="background:#090d16;color:#38bdf8;border:1px solid #1e293b;border-radius:4px;padding:3px 5px;font-size:11px;font-family:inherit;outline:none;cursor:pointer;">
+            <option value="Impact" selected>Impact</option>
+            <option value="Arial">Arial</option>
+            <option value="Courier New">Courier New</option>
+            <option value="Times New Roman">Times New Roman</option>
+            <option value="Comic Sans MS">Comic Sans MS</option>
+          </select>
+          <input type="range" id="text3DSize" min="10" max="150" value="60" title="Tamaño texto 3D"
+            style="width:55px;height:14px;accent-color:#00f0ff;cursor:pointer;" />
+          <input type="color" id="text3DColor" value="#ff0055" title="Color del Texto"
+            style="width:24px;height:22px;padding:0;border:1px solid #1e293b;border-radius:4px;background:#090d16;cursor:pointer;" />
+          <select id="text3DBorderStyle" class="kinetic-font-select" title="Estilo y Contorno del Texto"
+            style="background:#090d16;color:#f8fafc;border:1px solid #1e293b;border-radius:4px;padding:3px 5px;font-size:11px;font-family:inherit;outline:none;cursor:pointer;">
+            <option value="neon" selected>Neón</option>
+            <option value="solid">Sólido Contorno Negro</option>
+            <option value="gold">Oro</option>
+            <option value="cyan">Cian</option>
+          </select>
+          <button type="button" id="btnClearKineticText" class="kinetic-clear-btn"
+            title="Limpiar y ocultar texto 3D">[Limpiar]</button>
+        </div>
+
+        <div class="knobs-row knobs-row--5" id="rack-gen"></div>
+      </div>
+
+      <!-- MÓDULO 2 — MOD / DEFORMACIÓN -->
+      <div class="rack-module rack-module--mod panel--mod" id="moduleMod">
+        <div class="module-header">
+          <div class="module-title-group">
+            <span class="panel-id-badge">[02 · MOD FX]</span>
+            <span class="module-title" id="moduleTitleFxKnobs">DEFORMACIÓN</span>
+          </div>
+          <div class="module-header-right">
+            <span class="module-tag td-op-pill td-op-pill--top td-only-pill" id="fxKnobsTag">TOP · DISPLACE</span>
+            <button type="button" class="icon-btn panel-collapse-btn" data-collapse-panel="moduleMod"
+              aria-expanded="true" title="Minimizar / Expandir panel">▾</button>
+          </div>
+        </div>
+
+        <div class="pad-grid pad-grid--4">
+          <button type="button" class="perf-pad perf-pad--fx" id="btnGlitchBurst" data-action-id="fx_glitch">⚡
+            Glitch</button>
+          <button type="button" class="perf-pad perf-pad--fx" id="btnFreeze" data-action-id="fx_freeze">❄️
+            Freeze</button>
+          <button type="button" class="perf-pad perf-pad--fx" id="btnPixelCrt" data-action-id="fx_pixel_crt"
+            title="Efecto continuo de mosaico pixelado reactivo al bajo, scanlines CRT y RGB wave">🌀 Pixel /
+            CRT</button>
+          <button type="button" class="perf-pad perf-pad--fx" id="btnClean" data-action-id="fx_clean"
+            title="Restaurar efectos limpios">✨ Clean</button>
+        </div>
+
+        <div class="knobs-row knobs-row--4" id="rack-fx-space"></div>
+      </div>
+
+      <!-- MÓDULO 3 — FEEDBACK / COLOR -->
+      <div class="rack-module rack-module--color panel--color" id="moduleColor">
+        <div class="module-header">
+          <div class="module-title-group">
+            <span class="panel-id-badge">[03 · COLOR]</span>
+            <span class="module-title" id="moduleTitlePads">FEEDBACK / COLOR</span>
+          </div>
+          <div class="module-header-right">
+            <span class="module-tag td-op-pill td-op-pill--top td-only-pill">FB · CHROMA · LUT</span>
+            <button type="button" class="icon-btn panel-collapse-btn" data-collapse-panel="moduleColor"
+              aria-expanded="true" title="Minimizar / Expandir panel">▾</button>
+          </div>
+        </div>
+
+        <div class="color-pads-stack">
+          <div class="pad-grid pad-grid--4">
+            <button type="button" class="perf-pad perf-pad--color active" data-col="original"
+              data-action-id="color_original">Original</button>
+            <button type="button" class="perf-pad perf-pad--color" data-col="cyberpunk"
+              data-action-id="color_cyberpunk">Cyberpunk</button>
+            <button type="button" class="perf-pad perf-pad--color" data-col="infrared"
+              data-action-id="color_infrared">Infrarrojo</button>
+            <button type="button" class="perf-pad perf-pad--color" data-col="mono"
+              data-action-id="color_mono">Monocromo</button>
+          </div>
+          <div class="pad-grid pad-grid--2">
+            <button type="button" class="perf-pad perf-pad--fx" id="btnBurstFlash" data-action-id="master_flash"
+              title="Flash instantáneo (Espacio)">💥 Flash</button>
+            <button type="button" class="perf-pad perf-pad--fx" id="btnInvert" data-action-id="master_invert">🌗
+              Invert</button>
+          </div>
+        </div>
+
+        <div class="knobs-row knobs-row--3" id="rack-fx-color"></div>
+      </div>
+
+      <!-- MÓDULO 4 — TEMPO & SHOW SEQUENCES (2 COLUMNAS INTERNAS) -->
+      <div class="rack-module rack-module--show panel--show" id="moduleShow">
+        <div class="module-header module-header--show">
+          <div class="module-title-group">
+            <span class="panel-id-badge" id="moduleShowBadge">[04 · SEQUENCER]</span>
+            <span class="module-title" id="moduleTitleShow">SHOW</span>
+          </div>
+          <div class="module-header-right show-header-tools">
+            <button type="button" id="btnExportShow" class="seq-hdr-btn"
+              title="Descargar Show completo por canción (.vortex.json)">📥 Guardar Show</button>
+            <button type="button" id="btnImportShow" class="seq-hdr-btn"
+              title="Cargar Show por canción (.vortex.json)">📂 Cargar Show</button>
+            <input type="file" id="showFileInput" accept=".json,.vortex.json,application/json" hidden />
+            <span class="bpm-readout-pill">
+              <button type="button" id="btnLockBpm" class="bpm-lock-btn active" aria-pressed="true"
+                title="Candado BPM Maestro: bloquea cambios de tempo entre escenas">🔒</button>
+              <span class="bpm-clock-led" id="bpmClockLed" title="Pulso visual del reloj BPM"></span>
+              <span id="bpmReadoutText">120 BPM</span>
+            </span>
+            <span class="beat-meter" title="Compás 4/4">
+              <span class="beat-led" data-beat="0"></span><span class="beat-led" data-beat="1"></span><span
+                class="beat-led" data-beat="2"></span><span class="beat-led" data-beat="3"></span>
+            </span>
+            <button type="button" class="icon-btn panel-collapse-btn" data-collapse-panel="moduleShow"
+              aria-expanded="true" title="Minimizar / Expandir panel">▾</button>
+          </div>
+        </div>
+
+        <div class="show-split-grid">
+          <!-- Subcolumna Izquierda: Reloj de Tempo Real -->
+          <div class="show-col show-col--clock">
+            <div class="clock-knob-and-btns">
+              <div class="clock-knob-slot" id="rack-tempo"></div>
+              <div class="clock-quick-btns">
+                <button type="button" class="sub-btn" id="btnTapBPM" data-action-id="master_tap"
+                  title="Tap Tempo (4 clics)">🥁 TAP</button>
+                <button type="button" class="sub-btn sub-btn--pulse" id="btnPulseToggle" data-action-id="master_pulse"
+                  title="Modular FX al pulso BPM sin parpadeo de brillo">⚡ Pulse: OFF</button>
+                <button type="button" class="sub-btn" id="btnLfoTarget" data-action-id="master_target"
+                  title="Parámetro modulado por el reloj de pulso">🎯 Pulso: Deformar</button>
+              </div>
+            </div>
+
+            <div class="clock-selects-row">
+              <select id="selectBeatDivision" class="hud-select clock-select" title="División rítmica del reloj maestro"
+                aria-label="División de pulso">
+                <option value="0.25">Div: 1/4</option>
+                <option value="0.5">Div: 1/2</option>
+                <option value="1" selected>Div: 1/1</option>
+                <option value="2">Div: x2</option>
+                <option value="4">Div: x4</option>
+              </select>
+              <select id="selectWaveShape" class="hud-select clock-select" title="Forma de onda del reloj"
+                aria-label="Forma de onda del pulso">
+                <option value="sine" selected>∿ Sine</option>
+                <option value="saw">◺ Saw</option>
+                <option value="square">⎍ Square</option>
+                <option value="triangle">▲ Triangle</option>
+              </select>
+            </div>
+          </div>
+
+          <!-- Subcolumna Derecha: Live Show Sequences + Barra de Edición por Escena + Auto-Show -->
+          <div class="show-col show-col--seq">
+            <div class="seq-top-bar">
+              <button type="button" id="btnAutoShow" class="seq-btn seq-btn--autoshow" aria-pressed="false"
+                title="Analiza energía de audio y adapta escenas/FX automáticamente">
+                🚀 Auto-Show
+              </button>
+              <button type="button" id="btnSeqPlay" class="seq-btn seq-btn--play"
+                title="Avanzar escenas al ritmo de la duración de cada Cue">▶ Seq</button>
+              <span class="seq-status-pill" id="seqStatusBadge">CUE 1 · MANUAL</span>
+            </div>
+
+            <div class="cue-edit-bar" role="region" aria-label="Editor rápido de escena activa">
+              <input type="text" id="inputCueName" class="cue-name-input" maxlength="28" value="Intro"
+                placeholder="Nombre de escena..." aria-label="Nombre de la escena activa"
+                title="Renombrar escena activa (ej. Canción 1 - Inicio)" />
+              <select id="cueSourceTypeSelect" class="hud-select cue-source-select"
+                aria-label="Seleccionar fuente visual del Cue (2D, 3D o Media)"
+                title="Motor visual del Cue activo: combina Shaders 2D, Mundos 3D Three.js e Imágenes/Videos">
+                <optgroup label="⚡ 2D: Fluid / Vortex / Rings / Geo">
+                  <option value="2d:0">⚡ 2D: Fluid</option>
+                  <option value="2d:1">⚡ 2D: Vortex</option>
+                  <option value="2d:2">⚡ 2D: Rings</option>
+                  <option value="2d:3">⚡ 2D: Geo</option>
+                </optgroup>
+                <optgroup label="🧊 3D: Ocean Diver / Endless Drive / Bio-Terra / Catedral LiDAR">
+                  <option value="3d:0">🦈 3D: Ocean Diver 3D</option>
+                  <option value="3d:1">🚗 3D: Endless Drive 3D</option>
+                  <option value="3d:2">🌿 3D: Bio-Terra 3D</option>
+                  <option value="3d:3">🏛️ 3D: Catedral / LiDAR 3D</option>
+                </optgroup>
+                <optgroup id="cueMediaOptGroup" label="🖼️ Media: Imagen o Video de Galería / Subido / API">
+                  <option value="sample:city">🖼️ Media: Ciudad Cyber</option>
+                  <option value="sample:ocean">🖼️ Media: Océano</option>
+                  <option value="sample:dancer">🖼️ Media: Danza Neon</option>
+                  <option value="sample:concert">🖼️ Media: Concierto</option>
+                </optgroup>
+              </select>
+              <button type="button" id="btnCueAssignMedia" class="seq-btn seq-btn--media"
+                title="Subir imagen o video directo a este Cue">🖼️ Subir</button>
+              <input type="file" id="cueMediaFileInput" accept="image/*,video/*" hidden />
+              <div class="cue-duration-editor" title="Duración individual del Cue activo antes de avanzar al siguiente">
+                <input type="number" id="inputCueDuration" class="cue-dur-input" min="1" max="999" step="1" value="16"
+                  aria-label="Duración del Cue activo" />
+                <select id="selectCueDurationUnit" class="hud-select cue-dur-unit"
+                  aria-label="Unidad de duración del Cue">
+                  <option value="beats" selected>Beats</option>
+                  <option value="seconds">Segs</option>
+                </select>
+              </div>
+              <button type="button" id="btnSeqSave" class="seq-btn seq-btn--save"
+                title="Guardar fuente, FX, texto 3D, nombre y duración en el Cue seleccionado">💾 Guardar</button>
+            </div>
+
+            <div class="seq-scenes-grid" id="seqSceneGrid" role="group"
+              aria-label="Show Cues 1 a 8 (Teclas 1-8, MIDI Notas 36-43 o CC 21-28, también acepta Drag & Drop directo)">
+              <!-- 8 cues rendered by app.js -->
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </section>
+  </main>
+
+  <div id="toastStack" class="toast-stack" aria-live="polite"></div>
+
+  <button id="btnFloatingShowHUD" class="btn-float" title="Mostrar controles (H)">🎛️</button>
+
+  <script src="knobComponent.js"></script>
+  <script src="three.min.js"></script>
+  <script src="threeEngine.js"></script>
+  <script src="visualEngine.js"></script>
+  <script src="midiAndBridge.js"></script>
+  <script src="app.js"></script>
+</body>
+
+</html>
