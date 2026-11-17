@@ -133,7 +133,8 @@ class VisualEngine {
       precision mediump float;
       varying vec2 v_uv;
       uniform sampler2D u_tex;
-      void main() { gl_FragColor = vec4(texture2D(u_tex, v_uv).rgb, 1.0); }`;
+      uniform float u_opacity;
+      void main() { gl_FragColor = vec4(texture2D(u_tex, v_uv).rgb * u_opacity, 1.0); }`;
   }
 
   static get FRAGMENT() {
@@ -438,7 +439,7 @@ class VisualEngine {
       'u_kaleido', 'u_zoom', 'u_rot', 'u_burst', 'u_beat', 'u_invert', 'u_pixelCrt',
       'u_bass', 'u_mid', 'u_treble'
     ]);
-    this.blit = this.link(VisualEngine.VERTEX, VisualEngine.BLIT, ['u_tex']);
+    this.blit = this.link(VisualEngine.VERTEX, VisualEngine.BLIT, ['u_tex', 'u_opacity']);
   }
 
   initGeometry() {
@@ -1073,6 +1074,7 @@ class VisualEngine {
       gl.activeTexture(gl.TEXTURE0);
       gl.bindTexture(gl.TEXTURE_2D, this.fboB.texture);
       gl.uniform1i(this.blit.u.u_tex, 0);
+      gl.uniform1f(this.blit.u.u_opacity, P.mix !== undefined ? Math.max(0.0, Math.min(1.0, Number(P.mix))) : 1.0);
       gl.drawArrays(gl.TRIANGLES, 0, 6);
     } catch (err) {
       console.warn('[VisualEngine] Frame recovered from error:', err);
@@ -1092,6 +1094,7 @@ class VisualEngine {
     this.params.pixelCrt = false;
     this.params.monochrome = false;
     this.params.burst = 0.0;
+    this.params.mix = 1.0;
     this.bioValue = 0.0;
     this.bioDelta = 0.0;
     this.phase = 0;

@@ -165,38 +165,29 @@ Cada perilla se puede mover arrastrando verticalmente con el mouse, haciendo **d
 
 ---
 
-## 🎹 4. Instrucciones para Conectar el Controlador MIDI
+## 🎹 4. Conexión Automática MIDI en el Navegador (Web MIDI API)
 
-VORTEX soporta dos formas simultáneas de conexión MIDI: **vía Purr Data (UDP)** y **vía DAW / IAC Driver**.
+VORTEX utiliza la **API nativa Web MIDI (`navigator.requestMIDIAccess`)**, eliminando cualquier dependencia de Purr Data o servidores WebSocket locales y funcionando directamente sobre **HTTPS en GitHub Pages (`https://jalalokote.github.io/Vortex_Visuals/`)** o en local.
 
-### Método 1: Conectar Controlador MIDI Físico vía Purr Data (`MIDIPURRDATA.pd`)
-El proyecto incluye el parche listo para usar **`MIDIPURRDATA.pd`** en la raíz del proyecto.
+### 1. Auto-conexión por USB
+* Al abrir la página, la aplicación solicita automáticamente `navigator.requestMIDIAccess()` y añade un listener para el evento `midimessage` en todas las entradas (`inputs`) MIDI USB disponibles.
+* Si conectas o desconectas un controlador MIDI con la página abierta, el evento `onstatechange` lo detecta al instante.
+* En la barra superior verás el indicador **"Estado MIDI: Conectado (Nombre del Dispositivo)"** (en verde) o **"Estado MIDI: Desconectado"** si no hay ningún controlador USB conectado.
 
-1. **Conecta tu controlador MIDI** por USB a tu computadora.
-2. **Abre Purr Data** (o Pure Data) y abre el archivo **`MIDIPURRDATA.pd`**.
-3. En el menú superior de Purr Data, ve a **Preferences -> MIDI Preferences** y selecciona tu controlador MIDI como dispositivo de entrada (*Input Device 1*).
-4. El parche tiene un `[loadbang]` conectado a `[disconnect, connect localhost 8080(` hacia el objeto `[netsend -u]`. Si abriste Purr Data antes de iniciar el servidor, haz clic sobre el mensaje **`disconnect, connect localhost 8080`** dentro del parche para enlazarlo.
-5. **Cómo envía los datos el parche**:
-   * **Perillas / Faders (`[ctlin]`)**: Normaliza el valor MIDI (`0..127` -> `0.0..1.0`) y envía por UDP:
-     ```text
-     send <valor_normalizado> <numero_cc>;
-     ```
-   * **Pads / Teclas (`[notein]`)**: Filtra Note-On con `[stripnote]` y envía por UDP:
-     ```text
-     send note <numero_nota> <velocidad>;
-     ```
-6. **Cómo mapear controles con `🎹 MIDI Learn` en la página**:
-   * Haz clic en el botón **`🎹 MIDI Learn`** en la barra superior (se iluminará en ámbar).
-   * **Para asignar una Perilla**: Haz clic sobre cualquier perilla de la página y gira la perilla física de tu controlador MIDI. Se asignará automáticamente su número de CC. *(Para borrar el CC de una perilla, haz **clic derecho** sobre ella).*
-   * **Para asignar un Botón o Escena (Cue 1–8)**: Con `🎹 MIDI Learn` activo, haz clic sobre cualquier botón de la interfaz (por ejemplo `CUE 1`, `💥 Flash`, `🚗 Endless Drive`, `➕ Objeto / Bioma`) y presiona un pad o tecla de tu controlador MIDI. Verás aparecer una etiqueta `[N##]` en el botón indicando la nota asignada.
-   * Todas las asignaciones se guardan automáticamente en la memoria del navegador (`localStorage`).
+### 2. Procesamiento y Escalado de Datos (Control Change)
+* El motor filtra los mensajes **Control Change (`0xB0` / `176..191`)** y aplica la matemática de normalización dividiendo el valor entrante (`0 - 127`) entre `127`:
+  ```javascript
+  const normalizedValue = Math.max(0.0, Math.min(1.0, rawValue / 127.0));
+  ```
+* Ese valor normalizado (`0.0` a `1.0`) se escala automáticamente al rango real de cada parámetro o perilla (`min` a `max`).
 
-### Método 2: Conectar desde un DAW (Pro Tools, Ableton Live, Logic Pro)
-El servidor Node.js crea automáticamente un puerto MIDI virtual llamado **`"VORTEX Show Sync"`** y también escucha cualquier bus **`IAC Driver`**.
-* **Cambiar entre las 8 Escenas (Cues 1 a 8)**:
-  * Envía **Notas MIDI `36` a `43`** (C1 a G1) con velocidad > 0, o bien **MIDI CC `21` a `28`** con valor >= 64.
-* **Automatizar Perillas desde el DAW**:
-  * Envía mensajes **Control Change (CC 1 a CC 14)** al puerto `"VORTEX Show Sync"` o `IAC Driver`.
+### 3. Sistema de MIDI Learn (Sliders de Parámetros y Perillas)
+* **En los Sliders de Parámetros (`Offset X`, `Offset Y`, `Zoom`, `Opacidad` y `Tamaño Texto 3D`)**:
+  * Haz clic en el botón **`Learn`** ubicado justo al lado del slider. El botón cambiará a **`⏳ CC...`** (en ámbar).
+  * Mueve cualquier perilla o fader en tu controlador MIDI físico.
+  * El sistema capturará automáticamente ese número de CC, mostrará **`CC #`** en el botón, guardará la asignación en el navegador (`localStorage`) y controlará ese parámetro en tiempo real. *(Haz **clic derecho** sobre el botón `CC #` para borrar la asignación).*
+* **En las 14 Perillas Rotativas (Knobs)**:
+  * Haz clic directamente sobre la etiqueta **`CC #` / `Learn`** en la esquina superior derecha de cualquier perilla (o activa el botón global **`🎹 MIDI Learn`** en la barra superior y haz clic en la perilla/botón deseado) y mueve un control físico en tu hardware MIDI.
 
 ---
 

@@ -115,6 +115,58 @@
       color: #ffffff;
       box-shadow: 0 0 10px rgba(244, 63, 94, 0.35);
     }
+
+    .param-learn-btn {
+      font-family: var(--font-mono);
+      font-size: 8px;
+      font-weight: 700;
+      padding: 1px 5px;
+      border-radius: 3px;
+      border: 1px solid rgba(56, 189, 248, 0.35);
+      background: rgba(15, 23, 42, 0.85);
+      color: #7dd3fc;
+      cursor: pointer;
+      white-space: nowrap;
+      line-height: 1.25;
+      transition: all 140ms ease;
+    }
+
+    .param-learn-btn:hover {
+      border-color: #00f0ff;
+      color: #ffffff;
+      background: rgba(0, 240, 255, 0.18);
+    }
+
+    .param-learn-btn.armed {
+      background: rgba(245, 158, 11, 0.28);
+      border-color: #f59e0b;
+      color: #fde68a;
+      box-shadow: 0 0 8px rgba(245, 158, 11, 0.5);
+      animation: pulse-amber 1.2s infinite;
+    }
+
+    .param-learn-btn.mapped {
+      background: rgba(16, 185, 129, 0.22);
+      border-color: #10b981;
+      color: #6ee7b7;
+    }
+
+    .midi-group {
+      cursor: pointer;
+      user-select: none;
+    }
+
+    .midi-cc-activity-pill {
+      font-family: var(--font-mono);
+      font-size: 9.5px;
+      font-weight: 600;
+      padding: 1px 6px;
+      border-radius: 4px;
+      background: rgba(245, 158, 11, 0.16);
+      border: 1px solid rgba(245, 158, 11, 0.45);
+      color: #fcd34d;
+      white-space: nowrap;
+    }
   </style>
 </head>
 
@@ -243,25 +295,20 @@
       </div>
 
       <div class="hud-cluster">
-        <div class="midi-group" title="Puente UDP desde Purr Data [netsend -u] en puerto 8080">
-          <span class="status-led online" id="midiLed"></span>
-          <span class="udp-bridge-badge" id="midiStatusText">UDP :8080 (Purr Data)</span>
+        <div class="midi-group" id="midiStatusGroup"
+          title="Estado de conexión Web MIDI nativa (USB). Haz clic para volver a escanear controladores MIDI.">
+          <span class="status-led" id="midiLed"></span>
+          <span class="udp-bridge-badge" id="midiStatusText">Estado MIDI: Desconectado</span>
+          <span class="midi-cc-activity-pill" id="midiActivityBadge" hidden>CC --</span>
         </div>
         <button id="btnMidiLearn" class="btn-hud btn-midi-learn"
-          title="MIDI Learn: actívalo, haz clic en una perilla y mueve tu control en Purr Data. Clic derecho en una perilla = borrar asignación.">
+          title="MIDI Learn global: actívalo, haz clic en cualquier perilla, slider o botón y mueve un control CC en tu hardware MIDI. Clic derecho = borrar asignación.">
           <span class="lbl">🎹 MIDI Learn</span>
         </button>
         <span id="weatherMiniBadge" class="status-pill" style="display:none; font-size:11px; padding:2px 8px;"></span>
       </div>
 
       <div class="hud-cluster">
-        <div class="ws-input-group"
-          title="URL WebSocket para el Hub local (:8080) o Web Server DAT de TouchDesigner (:9980)">
-          <span class="status-led" id="wsLed"></span>
-          <input type="text" id="wsUrlInput" class="ws-input" value="ws://localhost:8080"
-            aria-label="URL del puente WebSocket" spellcheck="false" />
-          <button id="btnWsConnect" class="ws-btn-connect">Bridge</button>
-        </div>
         <div class="mode-switch" role="group" aria-label="Tema">
           <button class="mode-btn active" data-theme-btn="dark" title="Industrial">🌙</button>
           <button class="mode-btn" data-theme-btn="cyber" title="Cyber">⚡</button>
@@ -342,23 +389,31 @@
             </div>
 
             <div class="media-framing-row"
-              style="display:flex;align-items:center;gap:5px;flex-wrap:wrap;margin:5px 0 2px;padding:4px 6px;border-radius:6px;background:rgba(15,23,42,0.55);border:1px solid rgba(56,189,248,0.18);font-size:9px;color:#cbd5e1;">
-              <span style="font-weight:700;color:#7dd3fc;white-space:nowrap;">Encuadre Media</span>
-              <label style="display:flex;align-items:center;gap:2px;flex:1 1 58px;min-width:54px;">
+              style="display:flex;align-items:center;gap:4px;flex-wrap:wrap;margin:5px 0 2px;padding:4px 6px;border-radius:6px;background:rgba(15,23,42,0.55);border:1px solid rgba(56,189,248,0.18);font-size:9px;color:#cbd5e1;">
+              <span style="font-weight:700;color:#7dd3fc;white-space:nowrap;">Encuadre / Mix</span>
+              <label style="display:flex;align-items:center;gap:2px;flex:1 1 68px;min-width:64px;">
                 <span>X:</span>
-                <input type="range" id="mediaOffsetX" min="-1" max="1" step="0.01" value="0" style="width:100%;min-width:34px;accent-color:#38bdf8;" />
+                <input type="range" id="mediaOffsetX" min="-1" max="1" step="0.01" value="0" style="width:100%;min-width:28px;accent-color:#38bdf8;" />
+                <button type="button" class="param-learn-btn" id="btnLearnOffsetX" data-learn-param="mediaOffsetX" title="MIDI Learn para Offset X">Learn</button>
               </label>
-              <label style="display:flex;align-items:center;gap:2px;flex:1 1 58px;min-width:54px;">
+              <label style="display:flex;align-items:center;gap:2px;flex:1 1 68px;min-width:64px;">
                 <span>Y:</span>
-                <input type="range" id="mediaOffsetY" min="-1" max="1" step="0.01" value="0" style="width:100%;min-width:34px;accent-color:#38bdf8;" />
+                <input type="range" id="mediaOffsetY" min="-1" max="1" step="0.01" value="0" style="width:100%;min-width:28px;accent-color:#38bdf8;" />
+                <button type="button" class="param-learn-btn" id="btnLearnOffsetY" data-learn-param="mediaOffsetY" title="MIDI Learn para Offset Y">Learn</button>
               </label>
-              <label style="display:flex;align-items:center;gap:2px;flex:1 1 68px;min-width:62px;">
+              <label style="display:flex;align-items:center;gap:2px;flex:1 1 76px;min-width:70px;">
                 <span>Zoom:</span>
-                <input type="range" id="mediaZoom" min="0.1" max="4" step="0.01" value="1" style="width:100%;min-width:34px;accent-color:#38bdf8;" />
+                <input type="range" id="mediaZoom" min="0.1" max="4" step="0.01" value="1" style="width:100%;min-width:28px;accent-color:#38bdf8;" />
+                <button type="button" class="param-learn-btn" id="btnLearnZoom" data-learn-param="mediaZoom" title="MIDI Learn para Zoom">Learn</button>
+              </label>
+              <label style="display:flex;align-items:center;gap:2px;flex:1 1 78px;min-width:72px;">
+                <span>Opac:</span>
+                <input type="range" id="mediaOpacity" min="0" max="1" step="0.01" value="1" style="width:100%;min-width:28px;accent-color:#38bdf8;" />
+                <button type="button" class="param-learn-btn" id="btnLearnOpacity" data-learn-param="mediaOpacity" title="MIDI Learn para Opacidad">Learn</button>
               </label>
               <button type="button" id="btnResetMediaFraming" class="sub-btn"
                 style="padding:2px 6px;font-size:8.5px;line-height:1.2;white-space:nowrap;"
-                title="Restablecer encuadre al centro">Reset</button>
+                title="Restablecer encuadre y opacidad">Reset</button>
             </div>
 
             <div class="source-block source-block--media" id="mediaLibraryBlock">
@@ -543,17 +598,17 @@
               </div>
             </div>
 
-            <!-- 4. 🌱 BIO-INPUT (PURR DATA CC80 / NOTES) -->
+            <!-- 4. 🌱 BIO-INPUT (WEB MIDI CC80 / NOTES) -->
             <div class="audio-subblock bio-subblock"
               style="margin-top: 6px; padding-top: 6px; border-top: 1px dashed rgba(16,185,129,0.3);">
               <div class="audio-subblock-title"
-                style="color: #34d399; font-weight: 700; font-size: 11px; letter-spacing: 0.5px;">🌱 BIO-INPUT (PURR
-                DATA CC80 / NOTES)</div>
+                style="color: #34d399; font-weight: 700; font-size: 11px; letter-spacing: 0.5px;">🌱 BIO-INPUT (WEB
+                MIDI CC80 / NOTES)</div>
               <div class="bio-control-row"
                 style="display: flex; gap: 8px; align-items: center; justify-content: space-between; flex-wrap: wrap; margin-top: 4px;">
                 <button type="button" id="btnBioTo3D" class="sub-btn active"
                   style="border-color: #10b981; color: #10b981; font-weight: bold; padding: 4px 10px; font-size: 11px; background: rgba(16,185,129,0.15); border-radius: 4px; cursor: pointer;"
-                  title="Activar / Desactivar inyección de Bio-Pulso (Purr Data CC 80 / Notas) hacia el mundo 3D">
+                  title="Activar / Desactivar inyección de Bio-Pulso (Web MIDI CC 80 / Notas) hacia el mundo 3D">
                   🌱 Bio -> Mundo 3D: ON
                 </button>
                 <div class="bio-meter-wrapper"
@@ -653,6 +708,8 @@
           </select>
           <input type="range" id="text3DSize" min="10" max="150" value="60" title="Tamaño texto 3D"
             style="width:55px;height:14px;accent-color:#00f0ff;cursor:pointer;" />
+          <button type="button" class="param-learn-btn" id="btnLearnText3DSize" data-learn-param="text3DSize"
+            title="MIDI Learn para Tamaño Texto 3D">Learn</button>
           <input type="color" id="text3DColor" value="#ff0055" title="Color del Texto"
             style="width:24px;height:22px;padding:0;border:1px solid #1e293b;border-radius:4px;background:#090d16;cursor:pointer;" />
           <select id="text3DBorderStyle" class="kinetic-font-select" title="Estilo y Contorno del Texto"

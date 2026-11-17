@@ -84,13 +84,26 @@
   const btnMatrixTreble = document.getElementById('btnMatrixTreble');
   const rackAudio = document.getElementById('rack-audio');
 
+  const midiStatusGroup = document.getElementById('midiStatusGroup');
   const midiStatusText = document.getElementById('midiStatusText');
+  const midiActivityBadge = document.getElementById('midiActivityBadge');
   const btnMidiLearn = document.getElementById('btnMidiLearn');
   const midiLed = document.getElementById('midiLed');
 
   const wsUrlInput = document.getElementById('wsUrlInput');
   const btnWsConnect = document.getElementById('btnWsConnect');
   const wsLed = document.getElementById('wsLed');
+
+  const mediaOffsetX = document.getElementById('mediaOffsetX');
+  const mediaOffsetY = document.getElementById('mediaOffsetY');
+  const mediaZoom = document.getElementById('mediaZoom');
+  const mediaOpacity = document.getElementById('mediaOpacity');
+  const btnResetMediaFraming = document.getElementById('btnResetMediaFraming');
+  const btnLearnOffsetX = document.getElementById('btnLearnOffsetX');
+  const btnLearnOffsetY = document.getElementById('btnLearnOffsetY');
+  const btnLearnZoom = document.getElementById('btnLearnZoom');
+  const btnLearnOpacity = document.getElementById('btnLearnOpacity');
+  const btnLearnText3DSize = document.getElementById('btnLearnText3DSize');
 
   const btnResetVisuals = document.getElementById('btnResetVisuals');
   const btnFullscreen = document.getElementById('btnFullscreen');
@@ -326,7 +339,22 @@
   let lastSceneMidiTriggerTime = 0;
 
   const midiBridge = new MidiAndBridgeController({
-    wsUrl: defaultWsUrl,
+    onMidiStatusChange: (status) => {
+      if (midiLed) {
+        midiLed.className = status && status.connected ? 'status-led online' : 'status-led';
+      }
+      if (midiStatusText) {
+        midiStatusText.textContent = (status && status.message) ? status.message : 'Estado MIDI: Desconectado';
+      }
+      if (midiStatusGroup) {
+        midiStatusGroup.title = status && status.connected
+          ? `Controlador USB MIDI activo: ${status.devices.join(', ')} (clic para re-escanear)`
+          : 'Sin controlador MIDI USB detectado. Conecta tu dispositivo USB y haz clic aquí.';
+      }
+      if (midiActivityBadge && (!status || !status.connected)) {
+        midiActivityBadge.hidden = true;
+      }
+    },
     onMidiActivity: (info) => {
       if (midiLed) {
         midiLed.className = 'status-led online';
@@ -337,10 +365,11 @@
           midiLed.style.boxShadow = '';
         }, 70);
       }
-      if (midiStatusText && info && info.cc !== undefined) {
-        midiStatusText.textContent = `UDP CC ${info.cc} · ${Number(info.value).toFixed(2)}`;
+      if (midiActivityBadge && info && info.cc !== undefined) {
+        midiActivityBadge.hidden = false;
+        midiActivityBadge.textContent = `CC ${info.cc} · ${Number(info.value).toFixed(2)}`;
       }
-      // Retransmit bio-input for Purr Data CC 80, standard CC 14..17 or active Bio mode
+      // Retransmit bio-input for Web MIDI CC 80, standard CC 14..17 or active Bio mode
       if (info && info.cc !== undefined) {
         const ccNum = Number(info.cc);
         if (ccNum === 80 || [14, 15, 16, 17].includes(ccNum) || (typeof bioTo3DEnabled !== 'undefined' && bioTo3DEnabled)) {
@@ -356,35 +385,32 @@
         }
       }
     },
-    onWsStatusChange: (status, url) => {
-      if (!wsLed || !btnWsConnect) return;
-      if (status === 'connected') {
-        wsLed.className = 'status-led online';
-        wsLed.title = `Conectado a ${url} (Puente Purr Data UDP + TouchDesigner activo)`;
-        btnWsConnect.textContent = 'Online';
-        if (midiLed) midiLed.className = 'status-led online';
-        sendCleanTdInitialSync();
-      } else if (status === 'connecting') {
-        wsLed.className = 'status-led warn';
-        wsLed.title = `Conectando a ${url}...`;
-        btnWsConnect.textContent = 'Wait';
-      } else {
-        wsLed.className = 'status-led';
-        wsLed.title = 'Desconectado (Modo Standalone)';
-        btnWsConnect.textContent = 'Bridge';
-      }
+    onLearnAssigned: (target, cc) => {
+      if (btnMidiLearn) btnMidiLearn.classList.remove('active');
+      const label = (target && (target.label || target.channelName)) || 'Parámetro';
+      showToast(`🎹 MIDI CC #${cc} asignado a "${label}"`, 'cyan');
     },
-    onLearnAssigned: (knob, cc) => {
-      showToast(`Purr Data CC #${cc} asignado al canal "${knob.channelName}"`, 'cyan');
+    onMidiNote: (note, velocity) => {
+      handleIncomingMidiNote(note, velocity);
     },
     onTdTx: (packet) => {
       formatTdTxMonitor(packet);
     },
     onTdFrame: (dataUri) => {
-      // Draw real TouchDesigner output (td_frame base64 JPEG) covering the main TD canvas
       handleIncomingTdFrame(dataUri);
     }
   });
+
+  if (midiStatusGroup) {
+    midiStatusGroup.addEventListener('click', async () => {
+      const ok = await midiBridge.initWebMidi();
+      if (ok && midiBridge.isMidiConnected) {
+        showToast(`🎹 ${midiBridge.connectedDevices.join(', ')} conectado`, 'cyan');
+      } else {
+        showToast('🔌 Conecta un controlador MIDI por USB (Web MIDI activo)', 'warn');
+      }
+    });
+  }
 
   // --- 🌱 BIO-INPUT (PURR DATA CC80 / NOTES) Integration ---
   const btnBioTo3D = document.getElementById('btnBioTo3D');
@@ -473,26 +499,7 @@
     }
   }
 
-  // Hook WebSocket messages from server (UDP FUDI "bio <val>" or MIDI CC 80 / 14..17 relayed as bio_data)
-  const origHandleWsMessage = midiBridge.handleWsMessage.bind(midiBridge);
-  midiBridge.handleWsMessage = function (raw) {
-    if (typeof raw === 'string') {
-      if (raw.includes('bio_data')) {
-        try {
-          const d = JSON.parse(raw);
-          if (d && d.type === 'bio_data') {
-            applyBioInput(d.value, d.source || 'ws_bio');
-          }
-        } catch (_) { }
-      } else if (raw.toLowerCase().startsWith('bio')) {
-        const parts = raw.trim().replace(/;$/, '').split(/\s+/);
-        if (parts.length >= 2) {
-          applyBioInput(parts[1], 'udp_bio');
-        }
-      }
-    }
-    return origHandleWsMessage(raw);
-  };
+  // Native Web MIDI Note & CC integration (WebSockets removed)
 
   // --- Instantiate 12 Hardware Rotary Knobs (CC 1 to CC 12 mounted across Sections A, B, C, E) ---
   const knobDefinitions = [
@@ -590,8 +597,17 @@
           });
         }
       },
-      onMidiLearnArm: (instance) => {
-        if (midiBridge) midiBridge.armKnobForMidi(instance);
+      onMidiLearnArm: (instance, forceDirect = false) => {
+        if (midiBridge) {
+          clearWaitingMidiLearnButton();
+          midiBridge.armKnobForMidi(instance, forceDirect);
+          if (btnMidiLearn) {
+            btnMidiLearn.classList.toggle('active', Boolean(midiBridge.isMidiLearnActive));
+          }
+          if (instance.isArmedForMidi) {
+            showToast(`🎹 Mueve un control CC en tu hardware MIDI para asignar a "${instance.label}"`, 'warn', 2200);
+          }
+        }
       }
     });
 
@@ -846,8 +862,10 @@
 
     ctx.font = '500 11px "JetBrains Mono", monospace';
     ctx.fillStyle = 'rgba(255, 255, 255, 0.55)';
-    const wsStateTxt = midiBridge.isWsConnected || midiBridge.isTdDirectConnected ? 'ONLINE (TX ACTIVE)' : 'WAITING FOR TD WEBSOCKET';
-    ctx.fillText(`WS: ${wsUrlInput ? wsUrlInput.value : 'ws://localhost:8080'} · STATUS: ${wsStateTxt}`, panelLeft, panelTop + 18);
+    const midiStateTxt = midiBridge && midiBridge.isMidiConnected
+      ? `CONECTADO (${midiBridge.connectedDevices.join(', ')})`
+      : 'DESCONECTADO (SIN USB MIDI)';
+    ctx.fillText(`WEB MIDI API · ESTADO MIDI: ${midiStateTxt}`, panelLeft, panelTop + 18);
 
     // Draw 12 Channel Bars
     const barsTop = panelTop + 36;
@@ -2020,8 +2038,14 @@
     const x = mediaOffsetX ? parseFloat(mediaOffsetX.value) || 0 : 0;
     const y = mediaOffsetY ? parseFloat(mediaOffsetY.value) || 0 : 0;
     const zoom = mediaZoom ? parseFloat(mediaZoom.value) || 1 : 1;
-    if (visualEngine && typeof visualEngine.setMediaTransform === 'function') {
-      visualEngine.setMediaTransform(x, y, zoom);
+    const opacity = mediaOpacity ? parseFloat(mediaOpacity.value) : 1;
+    if (visualEngine) {
+      if (typeof visualEngine.setMediaTransform === 'function') {
+        visualEngine.setMediaTransform(x, y, zoom);
+      }
+      if (Number.isFinite(opacity)) {
+        visualEngine.setParam('mix', Math.max(0, Math.min(1, opacity)));
+      }
     }
   }
 
@@ -2029,16 +2053,74 @@
     if (mediaOffsetX) mediaOffsetX.value = '0';
     if (mediaOffsetY) mediaOffsetY.value = '0';
     if (mediaZoom) mediaZoom.value = '1';
+    if (mediaOpacity) mediaOpacity.value = '1';
     applyMediaFraming();
   }
 
-  [mediaOffsetX, mediaOffsetY, mediaZoom].forEach(slider => {
+  [mediaOffsetX, mediaOffsetY, mediaZoom, mediaOpacity].forEach(slider => {
     if (slider) {
       slider.addEventListener('input', applyMediaFraming);
     }
   });
   if (btnResetMediaFraming) {
     btnResetMediaFraming.addEventListener('click', resetMediaFraming);
+  }
+
+  // Register UI Slider Parameters for direct Web MIDI Learn (Offset X, Offset Y, Zoom, Opacidad, Tamaño Texto 3D)
+  if (midiBridge && typeof midiBridge.registerParameter === 'function') {
+    midiBridge.registerParameter({
+      id: 'mediaOffsetX',
+      label: 'Offset X',
+      element: mediaOffsetX,
+      learnBtn: btnLearnOffsetX,
+      min: -1,
+      max: 1,
+      step: 0.01,
+      onChange: () => applyMediaFraming()
+    });
+    midiBridge.registerParameter({
+      id: 'mediaOffsetY',
+      label: 'Offset Y',
+      element: mediaOffsetY,
+      learnBtn: btnLearnOffsetY,
+      min: -1,
+      max: 1,
+      step: 0.01,
+      onChange: () => applyMediaFraming()
+    });
+    midiBridge.registerParameter({
+      id: 'mediaZoom',
+      label: 'Zoom Media',
+      element: mediaZoom,
+      learnBtn: btnLearnZoom,
+      min: 0.1,
+      max: 4,
+      step: 0.01,
+      onChange: () => applyMediaFraming()
+    });
+    midiBridge.registerParameter({
+      id: 'mediaOpacity',
+      label: 'Opacidad',
+      element: mediaOpacity,
+      learnBtn: btnLearnOpacity,
+      min: 0,
+      max: 1,
+      step: 0.01,
+      onChange: () => applyMediaFraming()
+    });
+    midiBridge.registerParameter({
+      id: 'text3DSize',
+      label: 'Tamaño Texto 3D',
+      element: document.getElementById('text3DSize'),
+      learnBtn: btnLearnText3DSize,
+      min: 10,
+      max: 150,
+      step: 1,
+      onChange: () => {
+        const el = document.getElementById('text3DSize');
+        if (el) el.dispatchEvent(new Event('input'));
+      }
+    });
   }
 
   if (btnLoop) {
@@ -2960,8 +3042,9 @@
         midiLed.style.boxShadow = '';
       }, 70);
     }
-    if (midiStatusText) {
-      midiStatusText.textContent = `UDP NOTE ${note} · vel ${velocity}`;
+    if (midiActivityBadge) {
+      midiActivityBadge.hidden = false;
+      midiActivityBadge.textContent = `NOTE ${note} · vel ${velocity}`;
     }
 
     // 1. MIDI Learn Assignment when a button is waiting for a pad hit
@@ -3002,33 +3085,17 @@
     }
   }
 
-  // Intercept incoming WebSocket { type: "midi_note", note, velocity } cleanly
-  if (midiBridge && typeof midiBridge.handleWsMessage === 'function') {
-    const origHandleWsMessage = midiBridge.handleWsMessage.bind(midiBridge);
-    midiBridge.handleWsMessage = (raw) => {
-      if (typeof raw === 'string') {
-        const trimmed = raw.trim();
-        if (trimmed.startsWith('{')) {
-          try {
-            const data = JSON.parse(trimmed);
-            if (data && data.type === 'midi_note') {
-              handleIncomingMidiNote(data.note, data.velocity);
-              return;
-            }
-          } catch (e) { }
-        }
-      }
-      return origHandleWsMessage(raw);
-    };
-  }
-
   // Capture clicks on buttons while MIDI Learn is active to arm them instead of running their action
   document.addEventListener('click', (e) => {
     if (!midiBridge || !midiBridge.isMidiLearnActive) return;
+    if (e.target && e.target.closest && e.target.closest('.param-learn-btn, .knob-cc-badge, .modular-knob')) {
+      return;
+    }
     const btn = e.target && e.target.closest ? e.target.closest('button') : null;
     if (!btn) return;
     if (
       btn === btnMidiLearn ||
+      btn.classList.contains('param-learn-btn') ||
       btn.classList.contains('panel-collapse-btn') ||
       btn.classList.contains('modal-close-btn') ||
       btn.classList.contains('epilepsy-enter-btn') ||
@@ -3044,11 +3111,8 @@
     ensureMappableButtonIds();
     if (!btn.id) return;
 
-    // Clear any armed knob so only this button waits for incoming Note
-    if (midiBridge.armedKnob) {
-      midiBridge.armedKnob.setArmed(false);
-      midiBridge.armedKnob = null;
-    }
+    // Clear any armed knob/param so only this button waits for incoming Note
+    midiBridge.disarmAllTargets();
 
     const alreadyWaiting = waitingMidiLearnButtonId === btn.id;
     clearWaitingMidiLearnButton();
@@ -3056,7 +3120,7 @@
       waitingMidiLearnButtonId = btn.id;
       btn.classList.add('midi-learn-waiting');
       const cleanName = btn.textContent.replace(/\[N\d+\]/g, '').trim() || btn.id;
-      showToast(`🎹 Esperando Nota MIDI desde Purr Data para "${cleanName}"...`, 'warn');
+      showToast(`🎹 Esperando Nota MIDI para "${cleanName}"...`, 'warn');
     }
   }, true);
 
@@ -3069,33 +3133,10 @@
       }
       showToast(
         active
-          ? '🎹 MIDI Learn activo: haz clic en una perilla (CC) o en un botón/Cue (Nota) desde Purr Data'
+          ? '🎹 MIDI Learn activo: haz clic en cualquier perilla, botón "Learn" de slider o Cue y mueve tu controlador MIDI'
           : 'MIDI Learn finalizado',
         'warn'
       );
-    });
-  }
-
-  // --- WebSocket Bridge Host Reconnect ---
-  if (btnWsConnect && wsUrlInput) {
-    btnWsConnect.addEventListener('click', () => {
-      const url = wsUrlInput.value.trim();
-      if (url) {
-        localStorage.setItem('vortex_td_ws_url', url);
-        if (tdModalWsInput) tdModalWsInput.value = url;
-        midiBridge.connectWebSocket(url);
-      }
-    });
-
-    wsUrlInput.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') {
-        const url = wsUrlInput.value.trim();
-        if (url) {
-          localStorage.setItem('vortex_td_ws_url', url);
-          if (tdModalWsInput) tdModalWsInput.value = url;
-          midiBridge.connectWebSocket(url);
-        }
-      }
     });
   }
 

@@ -113,8 +113,9 @@ class RotaryKnob {
 
     this.ccBadge = document.createElement('span');
     this.ccBadge.className = 'knob-cc-badge';
-    this.ccBadge.textContent = this.cc !== null ? `CC ${this.cc}` : 'NO CC';
-    this.ccBadge.title = 'Haz clic con MIDI Learn activo para asignar CC desde Purr Data';
+    this.ccBadge.textContent = this.cc !== null ? `CC ${this.cc}` : 'Learn';
+    this.ccBadge.title = 'Haz clic aquí para activar MIDI Learn en esta perilla (Clic derecho = borrar CC)';
+    this.ccBadge.style.cursor = 'pointer';
 
     header.appendChild(this.titleRow);
     header.appendChild(this.ccBadge);
@@ -315,7 +316,7 @@ class RotaryKnob {
       this.container.classList.add('knob--armed');
     } else {
       this.ccBadge.classList.remove('armed');
-      this.ccBadge.textContent = this.cc !== null ? `CC ${this.cc}` : 'NO CC';
+      this.ccBadge.textContent = this.cc !== null ? `CC ${this.cc}` : 'Learn';
       this.container.classList.remove('knob--armed');
     }
   }
@@ -353,10 +354,20 @@ class RotaryKnob {
   bindEvents() {
     // Channel renaming (edit button / label double-click) removed: TD channel IDs stay fixed.
 
-    // Click for MIDI Learn when mode is active
+    // Direct click on CC / Learn badge arms this knob immediately for Web MIDI Learn
+    if (this.ccBadge) {
+      this.ccBadge.addEventListener('mousedown', (e) => e.stopPropagation());
+      this.ccBadge.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        this.onMidiLearnArm(this, true);
+      });
+    }
+
+    // Click for MIDI Learn when global mode is active
     this.container.addEventListener('click', () => {
       if (this.isEditingName) return;
-      this.onMidiLearnArm(this);
+      this.onMidiLearnArm(this, false);
     });
 
     // Mouse Drag (Vertical gesture standard)

@@ -1,63 +1,143 @@
 /**
- * VORTEX UDP / WEBSOCKET MIDI & TOUCHDESIGNER BRIDGE CONTROLLER
+ * VORTEX NATIVE WEB MIDI CONTROLLER (navigator.requestMIDIAccess)
  *
- * 1. Recibe mensajes UDP desde Purr Data ([netsend -u] -> localhost:8080)
- *    retransmitidos por Node.js vía WebSocket como:
- *      { type: "midi_cc", cc: Number(cc), value: Number(value) }
- * 2. Retransmite en tiempo real todos los cambios de perillas (mouse o MIDI),
- *    triggers, medios y audio FFT hacia TouchDesigner:
- *      - { type: "td_control", id, channel, cc, value, scaledValue }
- *      - { type: "td_trigger", action, state }
- *      - { type: "td_media", source }
- *      - { type: "td_audio", bass, mid, treble, bpm }
- * 3. Soporta conexión simultánea al Hub local (ws://localhost:8080) y opcionalmente
- *    a un Web Server DAT directo de TouchDesigner (ej. ws://localhost:9980).
+ * - Auto-conexión mediante la API nativa Web MIDI (navigator.requestMIDIAccess)
+ *   compatible con HTTPS en GitHub Pages y localhost, sin depender de Purr Data ni WebSockets.
+ * - Escucha el evento `midimessage` en todas las entradas (inputs) USB MIDI disponibles
+ *   y detecta conexión/desconexión en caliente (`onstatechange`).
+ * - Filtra mensajes Control Change (0xB0 / 176..191) y escala el valor de entrada
+ *   (0 - 127) al rango normalizado 0.0 a 1.0 (`rawValue / 127`).
+ * - Sistema de MIDI Learn unificado para Perillas (Knobs), Sliders de parámetros
+ *   (Offset X, Offset Y, Zoom, Opacidad, Tamaño 3D) y Botones.
  */
 
 class MidiAndBridgeController {
   constructor(options = {}) {
     this.knobs = new Map();          // knobId -> RotaryKnob
-    this.ccMap = new Map();          // cc (Number) -> knobId
-    this.storedByKnob = new Map();   // knobId -> cc (Number)
+    this.params = new Map();         // paramId -> { id, label, element, learnBtn, min, max, step, onChange, cc }
+    this.ccMap = new Map();          // cc (Number) -> targetId (knobId or paramId)
+    this.storedByTarget = new Map(); // targetId -> cc (Number)
+
     this.isMidiLearnActive = false;
     this.armedKnob = null;
+    this.armedParam = null;
 
-    // Primary Hub WebSocket (ws://localhost:8080 for Purr Data UDP + TD Hub)
-    this.ws = null;
-    this.wsUrl = options.wsUrl || 'ws://localhost:8080';
+    this.midiAccess = null;
+    this.connectedDevices = [];
+    this.isMidiConnected = false;
+    this.midiSupported = typeof navigator !== 'undefined' && typeof navigator.requestMIDIAccess === 'function';
+
+    // Legacy compatibility flags (WebSockets disabled)
     this.isWsConnected = false;
-    this.retryTimer = null;
-    this.manualClose = false;
-
-    // Optional Secondary Direct TD WebSocket (e.g. ws://localhost:9980)
-    this.tdDirectWs = null;
-    this.tdDirectUrl = '';
     this.isTdDirectConnected = false;
-
-    const host = window.location.hostname;
-    this.autoReconnect = window.location.protocol === 'file:' || host === 'localhost' || host === '127.0.0.1' || host === '';
 
     this.cb = {
       activity: options.onMidiActivity || (() => {}),
+      midiStatus: options.onMidiStatusChange || (() => {}),
       wsStatus: options.onWsStatusChange || (() => {}),
       learned: options.onLearnAssigned || options.onMidiLearned || (() => {}),
+      noteOn: options.onMidiNote || (() => {}),
       tdTx: options.onTdTx || (() => {}),
       tdFrame: options.onTdFrame || (() => {})
     };
 
     this.loadStoredMappings();
-    if (this.autoReconnect) {
-      this.connectWebSocket(this.wsUrl);
-    } else {
-      this.cb.wsStatus('idle', this.wsUrl);
+    this.initWebMidi();
+  }
+
+  // ------------------------------------------------------------ Auto-Conexión Web MIDI API
+  async initWebMidi() {
+    if (!this.midiSupported) {
+      this.isMidiConnected = false;
+      this.connectedDevices = [];
+      this.cb.midiStatus({
+        connected: false,
+        supported: false,
+        devices: [],
+        message: 'Estado MIDI: No soportado en este navegador'
+      });
+      return false;
+    }
+
+    try {
+      this.midiAccess = await navigator.requestMIDIAccess({ sysex: false });
+      this.midiAccess.onstatechange = () => {
+        this.bindMidiInputs();
+      };
+      this.bindMidiInputs();
+      return true;
+    } catch (err) {
+      console.warn('[Web MIDI] Acceso denegado o error inicializando Web MIDI:', err);
+      this.isMidiConnected = false;
+      this.connectedDevices = [];
+      this.cb.midiStatus({
+        connected: false,
+        supported: true,
+        devices: [],
+        message: 'Estado MIDI: Desconectado (Permiso denegado)'
+      });
+      return false;
     }
   }
 
-  // ------------------------------------------------------------ Mappings
+  bindMidiInputs() {
+    if (!this.midiAccess) return;
+    const deviceNames = [];
+
+    for (const input of this.midiAccess.inputs.values()) {
+      if (input.state === 'connected') {
+        const name = (input.name || input.manufacturer || 'Controlador MIDI USB').trim();
+        deviceNames.push(name);
+        input.onmidimessage = (event) => this.handleRawMidiMessage(event, name);
+      } else {
+        input.onmidimessage = null;
+      }
+    }
+
+    this.connectedDevices = deviceNames;
+    this.isMidiConnected = deviceNames.length > 0;
+
+    const statusSummary = this.isMidiConnected
+      ? `Estado MIDI: Conectado (${deviceNames.join(', ')})`
+      : 'Estado MIDI: Desconectado';
+
+    this.cb.midiStatus({
+      connected: this.isMidiConnected,
+      supported: true,
+      devices: deviceNames,
+      message: statusSummary
+    });
+  }
+
+  // ------------------------------------------------------------ Procesamiento de Mensajes MIDI
+  handleRawMidiMessage(event, deviceName = 'MIDI USB') {
+    const data = event && event.data;
+    if (!data || data.length < 2) return;
+
+    const status = data[0];
+    const command = status & 0xf0;
+    const ccOrNote = data[1];
+    const rawValue = data.length > 2 ? data[2] : 0;
+
+    // 1. Filtrar mensajes de Control Change (CC: 0xB0 / 176..191)
+    if (command === 0xb0) {
+      // Escalar el valor de entrada (0 - 127) al rango normalizado 0.0 a 1.0 (equivalente a [/ 127])
+      const normalizedValue = Math.max(0.0, Math.min(1.0, rawValue / 127.0));
+      this.handleMidiCC(ccOrNote, normalizedValue, deviceName, rawValue);
+      return;
+    }
+
+    // 2. Soporte adicional para Note On (0x90) con velocidad > 0 en caso de usar pads
+    if (command === 0x90 && rawValue > 0) {
+      this.cb.noteOn(ccOrNote, rawValue, deviceName);
+    }
+  }
+
+  // ------------------------------------------------------------ Registro de Perillas y Sliders (Parámetros)
   registerKnob(knob) {
     this.knobs.set(knob.id, knob);
-    if (this.storedByKnob.has(knob.id)) {
-      const cc = Number(this.storedByKnob.get(knob.id));
+    if (this.storedByTarget.has(knob.id)) {
+      const cc = Number(this.storedByTarget.get(knob.id));
       knob.setMidiCC(cc);
       this.ccMap.set(cc, knob.id);
     } else if (knob.cc !== null && knob.cc !== undefined) {
@@ -69,18 +149,83 @@ class MidiAndBridgeController {
     }
 
     knob.onContextMenu = (instance) => {
-      this.clearMapping(instance);
+      this.clearMapping(instance.id);
     };
   }
 
+  registerParameter(config) {
+    if (!config || !config.id) return null;
+    const param = {
+      id: config.id,
+      label: config.label || config.id,
+      element: config.element || null,
+      learnBtn: config.learnBtn || null,
+      min: config.min !== undefined ? Number(config.min) : 0.0,
+      max: config.max !== undefined ? Number(config.max) : 1.0,
+      step: config.step !== undefined ? Number(config.step) : 0.01,
+      cc: config.cc !== undefined && config.cc !== null ? Number(config.cc) : null,
+      isArmed: false,
+      onChange: config.onChange || (() => {})
+    };
+
+    if (this.storedByTarget.has(param.id)) {
+      const storedCc = Number(this.storedByTarget.get(param.id));
+      param.cc = storedCc;
+      this.ccMap.set(storedCc, param.id);
+    } else if (param.cc !== null && !this.ccMap.has(param.cc)) {
+      this.ccMap.set(param.cc, param.id);
+    }
+
+    this.params.set(param.id, param);
+    this.updateParamLearnButtonUI(param);
+
+    if (param.learnBtn) {
+      param.learnBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        this.armParameterForMidi(param.id);
+      });
+      param.learnBtn.addEventListener('contextmenu', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        this.clearMapping(param.id);
+      });
+    }
+
+    return param;
+  }
+
+  updateParamLearnButtonUI(param) {
+    if (!param || !param.learnBtn) return;
+    const btn = param.learnBtn;
+    if (param.isArmed) {
+      btn.classList.add('armed');
+      btn.classList.remove('mapped');
+      btn.textContent = '⏳ CC...';
+      btn.title = `Esperando movimiento de CC en tu controlador MIDI para "${param.label}" (clic para cancelar)`;
+    } else if (param.cc !== null && param.cc !== undefined) {
+      btn.classList.remove('armed');
+      btn.classList.add('mapped');
+      btn.textContent = `CC ${param.cc}`;
+      btn.title = `Controlado por MIDI CC #${param.cc} (${param.label}). Clic para reasignar · Clic derecho para borrar.`;
+    } else {
+      btn.classList.remove('armed', 'mapped');
+      btn.textContent = 'Learn';
+      btn.title = `Activar MIDI Learn para "${param.label}"`;
+    }
+  }
+
+  // ------------------------------------------------------------ Persistencia de Mapeos MIDI CC
   loadStoredMappings() {
     try {
-      const stored = JSON.parse(localStorage.getItem('vortex_udp_midi_mappings') || '[]');
+      const raw = localStorage.getItem('vortex_webmidi_cc_mappings_v1') || localStorage.getItem('vortex_udp_midi_mappings') || '[]';
+      const stored = JSON.parse(raw);
       if (Array.isArray(stored)) {
-        stored.forEach(({ knobId, cc }) => {
-          if (knobId && cc !== null && cc !== undefined) {
-            this.storedByKnob.set(knobId, Number(cc));
-            this.ccMap.set(Number(cc), knobId);
+        stored.forEach(({ targetId, knobId, cc }) => {
+          const id = targetId || knobId;
+          if (id && cc !== null && cc !== undefined) {
+            this.storedByTarget.set(id, Number(cc));
+            this.ccMap.set(Number(cc), id);
           }
         });
       }
@@ -90,322 +235,210 @@ class MidiAndBridgeController {
   saveMappings() {
     try {
       const arr = [];
-      this.ccMap.forEach((knobId, cc) => arr.push({ knobId, cc: Number(cc) }));
-      localStorage.setItem('vortex_udp_midi_mappings', JSON.stringify(arr));
+      this.ccMap.forEach((targetId, cc) => arr.push({ targetId, knobId: targetId, cc: Number(cc) }));
+      localStorage.setItem('vortex_webmidi_cc_mappings_v1', JSON.stringify(arr));
     } catch (e) {}
   }
 
-  assignCC(knob, ccNumber) {
+  assignCC(targetOrId, ccNumber) {
     const cc = Number(ccNumber);
+    const targetId = typeof targetOrId === 'string' ? targetOrId : (targetOrId && targetOrId.id);
+    if (!targetId || Number.isNaN(cc)) return;
+
+    // Si otro control tenía este CC, liberarlo primero
     const previousOwnerId = this.ccMap.get(cc);
-    if (previousOwnerId && previousOwnerId !== knob.id && this.knobs.has(previousOwnerId)) {
-      this.knobs.get(previousOwnerId).setMidiCC(null);
+    if (previousOwnerId && previousOwnerId !== targetId) {
+      if (this.knobs.has(previousOwnerId)) {
+        this.knobs.get(previousOwnerId).setMidiCC(null);
+      }
+      if (this.params.has(previousOwnerId)) {
+        const prevParam = this.params.get(previousOwnerId);
+        prevParam.cc = null;
+        this.updateParamLearnButtonUI(prevParam);
+      }
     }
-    this.ccMap.forEach((kId, existingCc) => {
-      if (kId === knob.id) this.ccMap.delete(existingCc);
+
+    // Eliminar cualquier CC anterior asociado a este mismo control
+    this.ccMap.forEach((existingTargetId, existingCc) => {
+      if (existingTargetId === targetId) this.ccMap.delete(existingCc);
     });
 
-    this.ccMap.set(cc, knob.id);
-    knob.setMidiCC(cc);
-    this.saveMappings();
-    this.cb.learned(knob, cc);
+    this.ccMap.set(cc, targetId);
+    this.storedByTarget.set(targetId, cc);
+
+    if (this.knobs.has(targetId)) {
+      const knob = this.knobs.get(targetId);
+      knob.setMidiCC(cc);
+      this.saveMappings();
+      this.cb.learned({ id: knob.id, label: knob.label, channelName: knob.channelName, type: 'knob' }, cc);
+    } else if (this.params.has(targetId)) {
+      const param = this.params.get(targetId);
+      param.cc = cc;
+      param.isArmed = false;
+      this.updateParamLearnButtonUI(param);
+      this.saveMappings();
+      this.cb.learned({ id: param.id, label: param.label, channelName: param.label, type: 'param' }, cc);
+    }
   }
 
-  clearMapping(knob) {
-    this.ccMap.forEach((kId, cc) => {
-      if (kId === knob.id) this.ccMap.delete(cc);
+  clearMapping(targetOrId) {
+    const targetId = typeof targetOrId === 'string' ? targetOrId : (targetOrId && targetOrId.id);
+    if (!targetId) return;
+
+    this.ccMap.forEach((existingId, cc) => {
+      if (existingId === targetId) this.ccMap.delete(cc);
     });
-    knob.setMidiCC(null);
+    this.storedByTarget.delete(targetId);
+
+    if (this.knobs.has(targetId)) {
+      this.knobs.get(targetId).setMidiCC(null);
+    }
+    if (this.params.has(targetId)) {
+      const param = this.params.get(targetId);
+      param.cc = null;
+      param.isArmed = false;
+      this.updateParamLearnButtonUI(param);
+    }
     this.saveMappings();
   }
 
   resetDefaultMappings() {
-    try { localStorage.removeItem('vortex_udp_midi_mappings'); } catch (e) {}
+    try {
+      localStorage.removeItem('vortex_webmidi_cc_mappings_v1');
+      localStorage.removeItem('vortex_udp_midi_mappings');
+    } catch (e) {}
     this.ccMap.clear();
-    this.storedByKnob.clear();
+    this.storedByTarget.clear();
     let idx = 1;
     this.knobs.forEach((knob) => {
       this.ccMap.set(idx, knob.id);
       knob.setMidiCC(idx);
       idx++;
     });
+    this.params.forEach((param) => {
+      param.cc = null;
+      param.isArmed = false;
+      this.updateParamLearnButtonUI(param);
+    });
   }
 
-  // ------------------------------------------------------------ MIDI Learn
-  toggleMidiLearn(force = null) {
-    this.isMidiLearnActive = force !== null ? force : !this.isMidiLearnActive;
-    if (!this.isMidiLearnActive && this.armedKnob) {
+  // ------------------------------------------------------------ Sistema MIDI Learn (Perillas + Sliders)
+  disarmAllTargets() {
+    if (this.armedKnob) {
       this.armedKnob.setArmed(false);
       this.armedKnob = null;
+    }
+    if (this.armedParam) {
+      this.armedParam.isArmed = false;
+      this.updateParamLearnButtonUI(this.armedParam);
+      this.armedParam = null;
+    }
+  }
+
+  toggleMidiLearn(force = null) {
+    this.isMidiLearnActive = force !== null ? force : !this.isMidiLearnActive;
+    if (!this.isMidiLearnActive) {
+      this.disarmAllTargets();
     }
     return this.isMidiLearnActive;
   }
 
-  armKnobForMidi(knob) {
-    if (!this.isMidiLearnActive) return;
-    if (this.armedKnob && this.armedKnob !== knob) {
-      this.armedKnob.setArmed(false);
+  armKnobForMidi(knob, forceDirectLearn = false) {
+    if (!this.isMidiLearnActive && !forceDirectLearn) return;
+    if (forceDirectLearn) {
+      this.isMidiLearnActive = true;
     }
-    if (this.armedKnob === knob) {
-      knob.setArmed(false);
-      this.armedKnob = null;
-    } else {
+
+    const wasSameKnob = this.armedKnob === knob;
+    this.disarmAllTargets();
+
+    if (!wasSameKnob && knob) {
       this.armedKnob = knob;
       knob.setArmed(true);
     }
   }
 
-  // ------------------------------------------------------------ Incoming CC Routing
-  handleMidiCC(ccRaw, valueRaw, source = 'udp') {
+  armParameterForMidi(paramId) {
+    const param = this.params.get(paramId);
+    if (!param) return false;
+
+    const wasArmed = param.isArmed && this.armedParam === param;
+    this.disarmAllTargets();
+
+    if (wasArmed) {
+      this.isMidiLearnActive = false;
+      return false;
+    }
+
+    this.isMidiLearnActive = true;
+    param.isArmed = true;
+    this.armedParam = param;
+    this.updateParamLearnButtonUI(param);
+    return true;
+  }
+
+  applyNormalizedToParam(param, normValue, source = 'midi') {
+    if (!param) return;
+    const clampedNorm = Math.max(0.0, Math.min(1.0, Number(normValue)));
+    const rawScaled = param.min + clampedNorm * (param.max - param.min);
+    const stepped = param.step ? Math.round(rawScaled / param.step) * param.step : rawScaled;
+    const finalVal = Number(stepped.toFixed(4));
+
+    if (param.element) {
+      param.element.value = String(finalVal);
+      param.element.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+    param.onChange(finalVal, clampedNorm, param, source);
+  }
+
+  // ------------------------------------------------------------ Ruteo de CC Entrante (0.0 .. 1.0)
+  handleMidiCC(ccRaw, valueRaw, source = 'Web MIDI', raw7Bit = null) {
     const cc = Number(ccRaw);
     const normValue = Math.max(0.0, Math.min(1.0, Number(valueRaw)));
     if (Number.isNaN(cc) || Number.isNaN(normValue)) return;
 
-    this.cb.activity({ source, cc, value: normValue });
+    this.cb.activity({ source, cc, value: normValue, raw: raw7Bit });
 
-    // a) If MIDI Learn is active and a knob is waiting for assignment
-    if (this.isMidiLearnActive && this.armedKnob) {
+    // a) Si hay un Slider/Parámetro esperando MIDI Learn
+    if (this.armedParam) {
+      const targetParam = this.armedParam;
+      this.armedParam = null;
+      targetParam.isArmed = false;
+      this.isMidiLearnActive = false;
+      this.assignCC(targetParam.id, cc);
+      this.applyNormalizedToParam(targetParam, normValue, source);
+      return;
+    }
+
+    // b) Si hay una Perilla (Knob) esperando MIDI Learn
+    if (this.armedKnob) {
       const targetKnob = this.armedKnob;
-      targetKnob.setArmed(false);
       this.armedKnob = null;
-      this.assignCC(targetKnob, cc);
+      targetKnob.setArmed(false);
+      this.isMidiLearnActive = false;
+      this.assignCC(targetKnob.id, cc);
       targetKnob.setNormalized(normValue, true, source);
       return;
     }
 
-    // b) Normal mode: find the knob assigned to this CC
-    const knobId = this.ccMap.get(cc);
-    const knob = knobId ? this.knobs.get(knobId) : null;
-    if (knob) {
-      knob.setNormalized(normValue, true, source);
+    // c) Modo normal: buscar el control (Perilla o Slider) asignado a este CC
+    const targetId = this.ccMap.get(cc);
+    if (!targetId) return;
+
+    if (this.knobs.has(targetId)) {
+      this.knobs.get(targetId).setNormalized(normValue, true, source);
+    } else if (this.params.has(targetId)) {
+      this.applyNormalizedToParam(this.params.get(targetId), normValue, source);
     }
   }
 
-  // ------------------------------------------------------------ WebSocket Connections
-  connectWebSocket(url) {
-    clearTimeout(this.retryTimer);
-    const cleanUrl = (url || 'ws://localhost:8080').trim();
-
-    // If user entered a custom port different from 8080 (e.g. ws://localhost:9980 for TD Web Server DAT),
-    // keep 8080 connected for Purr Data UDP and also connect the secondary socket to the custom TD port!
-    if (!cleanUrl.includes(':8080') && !cleanUrl.endsWith('/ws')) {
-      this.connectDirectTdSocket(cleanUrl);
-      if (!this.isWsConnected) {
-        this._openPrimarySocket('ws://localhost:8080');
-      }
-      return;
-    }
-
-    this._openPrimarySocket(cleanUrl);
-  }
-
-  _openPrimarySocket(url) {
-    if (this.ws) {
-      this.manualClose = true;
-      try { this.ws.close(); } catch (e) {}
-      this.ws = null;
-    }
-    this.manualClose = false;
-    this.wsUrl = url;
-    this.cb.wsStatus('connecting', url);
-
-    let ws;
-    try {
-      ws = new WebSocket(url);
-    } catch (e) {
-      this.cb.wsStatus('disconnected', url);
-      return;
-    }
-    this.ws = ws;
-
-    ws.onopen = () => {
-      this.isWsConnected = true;
-      this.cb.wsStatus('connected', this.tdDirectUrl || url);
-      this.send({ event: 'hello', client: 'vortex-web' });
-    };
-
-    ws.onmessage = (ev) => this.handleWsMessage(ev.data);
-    ws.onerror = () => {};
-
-    ws.onclose = () => {
-      const wasConnected = this.isWsConnected;
-      this.isWsConnected = false;
-      if (this.ws === ws) this.ws = null;
-      if (!this.isTdDirectConnected) {
-        this.cb.wsStatus('disconnected', url);
-      }
-
-      if (!this.manualClose && this.autoReconnect) {
-        this.retryTimer = setTimeout(() => {
-          this._openPrimarySocket(this.wsUrl);
-        }, wasConnected ? 1500 : 4000);
-      }
-    };
-  }
-
-  connectDirectTdSocket(url) {
-    if (this.tdDirectWs) {
-      try { this.tdDirectWs.close(); } catch (e) {}
-      this.tdDirectWs = null;
-    }
-    this.tdDirectUrl = url;
-    this.cb.wsStatus('connecting', url);
-
-    try {
-      const dws = new WebSocket(url);
-      this.tdDirectWs = dws;
-      dws.onopen = () => {
-        this.isTdDirectConnected = true;
-        this.cb.wsStatus('connected', url);
-      };
-      dws.onmessage = (ev) => this.handleWsMessage(ev.data);
-      dws.onerror = () => {};
-      dws.onclose = () => {
-        this.isTdDirectConnected = false;
-        if (this.tdDirectWs === dws) this.tdDirectWs = null;
-        this.cb.wsStatus(this.isWsConnected ? 'connected' : 'disconnected', this.isWsConnected ? this.wsUrl : url);
-      };
-    } catch (e) {
-      this.cb.wsStatus(this.isWsConnected ? 'connected' : 'disconnected', url);
-    }
-  }
-
-  handleWsMessage(raw) {
-    if (typeof raw !== 'string') return;
-    const trimmed = raw.trim();
-    if (!trimmed) return;
-
-    let data = null;
-    if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
-      try {
-        data = JSON.parse(trimmed);
-      } catch (e) {
-        return;
-      }
-    } else {
-      // Direct FUDI fallback: "<value> <cc>;" or "send <value> <cc>;"
-      const clean = trimmed.replace(/;$/, '').replace(/^(send|list)\s+/i, '').trim();
-      const parts = clean.split(/\s+/);
-      if (parts.length >= 2) {
-        const v = parseFloat(parts[0]);
-        const c = parseInt(parts[1], 10);
-        if (!Number.isNaN(v) && !Number.isNaN(c)) {
-          this.handleMidiCC(c, v, 'udp');
-        }
-      }
-      return;
-    }
-
-    if (!data || typeof data !== 'object') return;
-
-    // 1. Incoming frame from TouchDesigner over WebSocket (raw base64 JPEG or data URI)
-    if (data.type === 'td_frame' && data.data) {
-      const raw = String(data.data);
-      const dataUri = raw.startsWith('data:') ? raw : `data:image/jpeg;base64,${raw}`;
-      this.cb.tdFrame(dataUri);
-      return;
-    }
-
-    // 2. Primary UDP -> WS format from Purr Data: { type: "midi_cc", cc: Number(cc), value: Number(value) }
-    if (data.type === 'midi_cc') {
-      this.handleMidiCC(data.cc, data.value, 'udp');
-      return;
-    }
-
-    // Ignore our own outbound td_* echoes if rebroadcasted
-    if (
-      data.type === 'td_control' ||
-      data.type === 'td_trigger' ||
-      data.type === 'td_media' ||
-      data.type === 'td_audio' ||
-      data.type === 'udp_bridge_ready' ||
-      data.event === 'hello'
-    ) {
-      return;
-    }
-
-    // 3. Generic CC object: { cc: 1, value: 0.75 }
-    if (data.cc !== undefined && data.cc !== null && data.param === undefined) {
-      const v = parseFloat(data.value ?? data.val);
-      if (!Number.isNaN(v)) {
-        this.handleMidiCC(data.cc, v > 1 ? v / 127 : v, 'ws');
-      }
-      return;
-    }
-
-    // 4. Named parameter update from TD: { param: "frequency", value: 0.5 }
-    if (data.param !== undefined) {
-      const knob = this.knobs.get(String(data.param));
-      if (knob) {
-        const v = parseFloat(data.value ?? data.val);
-        if (!Number.isNaN(v)) {
-          if (v <= 1 && knob.max > 1) knob.setNormalized(v, true, 'ws');
-          else knob.setValue(v, true, 'ws');
-        }
-      }
-    }
-  }
-
-  send(obj) {
-    const json = JSON.stringify(obj);
-    if (this.isWsConnected && this.ws && this.ws.readyState === WebSocket.OPEN) {
-      try { this.ws.send(json); } catch (e) {}
-    }
-    if (this.isTdDirectConnected && this.tdDirectWs && this.tdDirectWs.readyState === WebSocket.OPEN) {
-      try { this.tdDirectWs.send(json); } catch (e) {}
-    }
-  }
-
-  // ------------------------------------------------------------ Standardized TouchDesigner Protocol
-  sendTdControl({ id, channel, cc, value, scaledValue }) {
-    const packet = {
-      type: 'td_control',
-      id: id,
-      channel: channel || id,
-      cc: cc !== null && cc !== undefined ? Number(cc) : null,
-      value: Number(Number(value).toFixed(4)),
-      scaledValue: Number(Number(scaledValue).toFixed(4))
-    };
-    this.send(packet);
-    this.cb.tdTx(packet);
-  }
-
-  sendTdTrigger({ action, id, state, value }) {
-    const isActive = Boolean(state);
-    const packet = {
-      type: 'td_trigger',
-      id: id || action,
-      action: action || id,
-      value: value !== undefined && value !== null ? value : (isActive ? 1 : 0),
-      state: isActive
-    };
-    this.send(packet);
-    this.cb.tdTx(packet);
-  }
-
-  sendTdMedia({ source, mediaType, mode, absolutePath }) {
-    const packet = {
-      type: 'td_media',
-      source: source !== undefined && source !== null ? source : '',
-      mediaType: mediaType || 'image',
-      mode: mode || 'media'
-    };
-    if (absolutePath) packet.absolutePath = absolutePath;
-    this.send(packet);
-    this.cb.tdTx(packet);
-  }
-
-  sendTdAudio({ bass, mid, treble, bpm, beatEnvelope }) {
-    const packet = {
-      type: 'td_audio',
-      bass: Number(Number(bass || 0).toFixed(4)),
-      mid: Number(Number(mid || 0).toFixed(4)),
-      treble: Number(Number(treble || 0).toFixed(4)),
-      bpm: Number(bpm || 120),
-      beat: Number(Number(beatEnvelope || 0).toFixed(4))
-    };
-    this.send(packet);
-  }
+  // Métodos de compatibilidad sin operación de red (WebSockets eliminados)
+  connectWebSocket() {}
+  send() {}
+  sendTdControl(payload) { this.cb.tdTx({ type: 'td_control', ...payload }); }
+  sendTdTrigger(payload) { this.cb.tdTx({ type: 'td_trigger', ...payload }); }
+  sendTdMedia(payload) { this.cb.tdTx({ type: 'td_media', ...payload }); }
+  sendTdAudio() {}
 }
 
 window.MidiAndBridgeController = MidiAndBridgeController;
