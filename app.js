@@ -254,6 +254,9 @@
             a.context.resume().catch(() => { });
           }
         }
+        if (typeof midiBridge !== 'undefined' && midiBridge && typeof midiBridge.initWebMidi === 'function') {
+          midiBridge.initWebMidi();
+        }
       } catch (e) { }
       setTimeout(() => {
         epilepsyModal.hidden = true;

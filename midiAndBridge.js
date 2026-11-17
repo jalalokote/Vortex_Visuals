@@ -3,8 +3,9 @@
  *
  * - Auto-conexión mediante la API nativa Web MIDI (navigator.requestMIDIAccess)
  *   compatible con HTTPS en GitHub Pages y localhost, sin depender de Purr Data ni WebSockets.
- * - Escucha el evento `midimessage` en todas las entradas (inputs) USB MIDI disponibles
- *   y detecta conexión/desconexión en caliente (`onstatechange`).
+ * - Escucha el evento `midimessage` en todas las entradas (inputs) USB MIDI disponibles,
+ *   abre explícitamente cada puerto (`input.open()`) y re-escanea automáticamente
+ *   para capturar la inicialización asíncrona de CoreMIDI en macOS / Windows.
  * - Filtra mensajes Control Change (0xB0 / 176..191) y escala el valor de entrada
  *   (0 - 127) al rango normalizado 0.0 a 1.0 (`rawValue / 127`).
  * - Sistema de MIDI Learn unificado para Perillas (Knobs), Sliders de parámetros
@@ -25,6 +26,7 @@ class MidiAndBridgeController {
     this.midiAccess = null;
     this.connectedDevices = [];
     this.isMidiConnected = false;
+    this.scanPollTimer = null;
     this.midiSupported = typeof navigator !== 'undefined' && typeof navigator.requestMIDIAccess === 'function';
 
     // Legacy compatibility flags (WebSockets disabled)
@@ -43,6 +45,7 @@ class MidiAndBridgeController {
 
     this.loadStoredMappings();
     this.initWebMidi();
+    this.startAutoScanLoop();
   }
 
   // ------------------------------------------------------------ Auto-Conexión Web MIDI API
@@ -54,7 +57,7 @@ class MidiAndBridgeController {
         connected: false,
         supported: false,
         devices: [],
-        message: 'Estado MIDI: No soportado en este navegador'
+        message: 'Estado MIDI: No soportado (Usa Chrome/Edge)'
       });
       return false;
     }
@@ -65,19 +68,35 @@ class MidiAndBridgeController {
         this.bindMidiInputs();
       };
       this.bindMidiInputs();
+
+      // CoreMIDI en macOS a veces termina de poblar inputs unos milisegundos después de resolver requestMIDIAccess
+      setTimeout(() => this.bindMidiInputs(), 150);
+      setTimeout(() => this.bindMidiInputs(), 500);
+      setTimeout(() => this.bindMidiInputs(), 1200);
       return true;
     } catch (err) {
-      console.warn('[Web MIDI] Acceso denegado o error inicializando Web MIDI:', err);
+      console.warn('[Web MIDI] Error o permiso pendiente inicializando Web MIDI:', err);
       this.isMidiConnected = false;
       this.connectedDevices = [];
       this.cb.midiStatus({
         connected: false,
         supported: true,
         devices: [],
-        message: 'Estado MIDI: Desconectado (Permiso denegado)'
+        message: 'Estado MIDI: Desconectado (Haz clic aquí para activar)'
       });
       return false;
     }
+  }
+
+  startAutoScanLoop() {
+    if (this.scanPollTimer) clearInterval(this.scanPollTimer);
+    this.scanPollTimer = setInterval(() => {
+      if (!this.midiAccess && this.midiSupported) {
+        this.initWebMidi();
+      } else if (this.midiAccess) {
+        this.bindMidiInputs();
+      }
+    }, 2200);
   }
 
   bindMidiInputs() {
@@ -85,10 +104,21 @@ class MidiAndBridgeController {
     const deviceNames = [];
 
     for (const input of this.midiAccess.inputs.values()) {
-      if (input.state === 'connected') {
-        const name = (input.name || input.manufacturer || 'Controlador MIDI USB').trim();
-        deviceNames.push(name);
-        input.onmidimessage = (event) => this.handleRawMidiMessage(event, name);
+      if (input.state !== 'disconnected') {
+        const rawName = (input.name || input.manufacturer || 'Controlador MIDI USB').replace(/\s+/g, ' ').trim();
+        // Si el nombre viene repetido como "WORLDE WORLDE", limpiarlo
+        const parts = rawName.split(' ');
+        const cleanName = (parts.length === 2 && parts[0].toLowerCase() === parts[1].toLowerCase())
+          ? parts[0]
+          : rawName;
+
+        deviceNames.push(cleanName);
+
+        if (typeof input.open === 'function' && input.connection !== 'open') {
+          try { input.open().catch(() => {}); } catch (_) {}
+        }
+
+        input.onmidimessage = (event) => this.handleRawMidiMessage(event, cleanName);
       } else {
         input.onmidimessage = null;
       }
@@ -114,12 +144,29 @@ class MidiAndBridgeController {
     const data = event && event.data;
     if (!data || data.length < 2) return;
 
+    // Si llega un mensaje MIDI y el indicador aún decía desconectado, marcar conectado de inmediato
+    if (!this.isMidiConnected) {
+      this.isMidiConnected = true;
+      if (!this.connectedDevices.includes(deviceName)) {
+        this.connectedDevices.push(deviceName);
+      }
+      this.cb.midiStatus({
+        connected: true,
+        supported: true,
+        devices: this.connectedDevices,
+        message: `Estado MIDI: Conectado (${this.connectedDevices.join(', ')})`
+      });
+    }
+
     const status = data[0];
+    // Ignorar mensajes de reloj/sistema en tiempo real (0xF8..0xFF como Active Sensing 0xFE o Timing Clock 0xF8)
+    if (status >= 0xf8) return;
+
     const command = status & 0xf0;
     const ccOrNote = data[1];
     const rawValue = data.length > 2 ? data[2] : 0;
 
-    // 1. Filtrar mensajes de Control Change (CC: 0xB0 / 176..191)
+    // 1. Filtrar mensajes de Control Change (CC: 0xB0 / 176..191 en cualquier canal MIDI 1..16)
     if (command === 0xb0) {
       // Escalar el valor de entrada (0 - 127) al rango normalizado 0.0 a 1.0 (equivalente a [/ 127])
       const normalizedValue = Math.max(0.0, Math.min(1.0, rawValue / 127.0));
